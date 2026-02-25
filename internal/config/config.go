@@ -108,14 +108,36 @@ func configPath() string {
 	return filepath.Join(configDir(), "config.json")
 }
 
+// ConfigPath returns the path to the config file (for display purposes).
+func ConfigPath() string {
+	return configPath()
+}
+
+// PresetNames returns the sorted list of available theme preset names.
+func PresetNames() []string {
+	names := make([]string, 0, len(ThemePresets))
+	for name := range ThemePresets {
+		names = append(names, name)
+	}
+	// Stable order
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			if names[j] < names[i] {
+				names[i], names[j] = names[j], names[i]
+			}
+		}
+	}
+	return names
+}
+
 // Load reads the config from disk. Returns defaults if the file doesn't exist.
 func Load() (*Config, error) {
-	cfg := &Config{AutoUpdate: true, Theme: DefaultTheme()}
+	cfg := &Config{AutoUpdate: true}
 
 	data, err := os.ReadFile(configPath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Write defaults
+			cfg.Theme = DefaultTheme()
 			_ = cfg.Save()
 			return cfg, nil
 		}
@@ -126,41 +148,75 @@ func Load() (*Config, error) {
 		return cfg, err
 	}
 
-	// Resolve base theme: preset if theme_name matches, otherwise DefaultTheme
-	base := DefaultTheme()
+	// Resolve theme: if theme_name matches a preset, use it as the base.
+	// Only theme fields that differ from DefaultTheme() are treated as
+	// intentional overrides (old configs have all defaults baked in).
 	if cfg.ThemeName != "" {
 		if preset, ok := ThemePresets[cfg.ThemeName]; ok {
-			base = preset
+			defaults := DefaultTheme()
+			saved := cfg.Theme
+			cfg.Theme = preset
+
+			// Apply only intentional overrides (values that differ from defaults)
+			if saved.Bg != "" && saved.Bg != defaults.Bg {
+				cfg.Theme.Bg = saved.Bg
+			}
+			if saved.Fg != "" && saved.Fg != defaults.Fg {
+				cfg.Theme.Fg = saved.Fg
+			}
+			if saved.FgMuted != "" && saved.FgMuted != defaults.FgMuted {
+				cfg.Theme.FgMuted = saved.FgMuted
+			}
+			if saved.Accent != "" && saved.Accent != defaults.Accent {
+				cfg.Theme.Accent = saved.Accent
+			}
+			if saved.AccentSecondary != "" && saved.AccentSecondary != defaults.AccentSecondary {
+				cfg.Theme.AccentSecondary = saved.AccentSecondary
+			}
+			if saved.Surface != "" && saved.Surface != defaults.Surface {
+				cfg.Theme.Surface = saved.Surface
+			}
+			if saved.SurfaceDark != "" && saved.SurfaceDark != defaults.SurfaceDark {
+				cfg.Theme.SurfaceDark = saved.SurfaceDark
+			}
+			if saved.Success != "" && saved.Success != defaults.Success {
+				cfg.Theme.Success = saved.Success
+			}
+			if saved.BorderInactive != "" && saved.BorderInactive != defaults.BorderInactive {
+				cfg.Theme.BorderInactive = saved.BorderInactive
+			}
+			return cfg, nil
 		}
 	}
 
-	// Fill missing theme fields with base
+	// No preset — fill missing theme fields with defaults
+	defaults := DefaultTheme()
 	if cfg.Theme.Bg == "" {
-		cfg.Theme.Bg = base.Bg
+		cfg.Theme.Bg = defaults.Bg
 	}
 	if cfg.Theme.Fg == "" {
-		cfg.Theme.Fg = base.Fg
+		cfg.Theme.Fg = defaults.Fg
 	}
 	if cfg.Theme.FgMuted == "" {
-		cfg.Theme.FgMuted = base.FgMuted
+		cfg.Theme.FgMuted = defaults.FgMuted
 	}
 	if cfg.Theme.Accent == "" {
-		cfg.Theme.Accent = base.Accent
+		cfg.Theme.Accent = defaults.Accent
 	}
 	if cfg.Theme.AccentSecondary == "" {
-		cfg.Theme.AccentSecondary = base.AccentSecondary
+		cfg.Theme.AccentSecondary = defaults.AccentSecondary
 	}
 	if cfg.Theme.Surface == "" {
-		cfg.Theme.Surface = base.Surface
+		cfg.Theme.Surface = defaults.Surface
 	}
 	if cfg.Theme.SurfaceDark == "" {
-		cfg.Theme.SurfaceDark = base.SurfaceDark
+		cfg.Theme.SurfaceDark = defaults.SurfaceDark
 	}
 	if cfg.Theme.Success == "" {
-		cfg.Theme.Success = base.Success
+		cfg.Theme.Success = defaults.Success
 	}
 	if cfg.Theme.BorderInactive == "" {
-		cfg.Theme.BorderInactive = base.BorderInactive
+		cfg.Theme.BorderInactive = defaults.BorderInactive
 	}
 
 	return cfg, nil

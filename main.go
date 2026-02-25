@@ -45,6 +45,12 @@ func main() {
 		return
 	}
 
+	// Theme listing command
+	if len(args) > 0 && (args[0] == "themes" || args[0] == "theme") {
+		doListThemes(args[1:])
+		return
+	}
+
 	// Internal server mode: sax --server -S <name> [--cmd <command...>]
 	if containsFlag(args, "--server") {
 		name := flagValue(args, "-S")
@@ -289,6 +295,8 @@ usage: sax                          interactive session picker
        sax -l, --list               list active sessions
        sax --kill <name>            kill a session
        sax --kill-all               kill all sessions
+       sax themes                   list available color themes
+       sax themes set <name>        apply a theme preset
        sax update                   update sax to the latest release
        sax --version, -v            show version
 
@@ -839,6 +847,10 @@ func doStatus(name string) {
 }
 
 func doServerMode(name string, command []string) {
+	// Force true color rendering — server runs as headless daemon without a TTY,
+	// so termenv/lipgloss would otherwise detect no color support.
+	os.Setenv("COLORTERM", "truecolor")
+
 	logFile := ipc.SessionsDir() + "/" + name + ".log"
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err == nil {
@@ -861,6 +873,56 @@ func doServerMode(name string, command []string) {
 	if err := srv.Run(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// --- Themes ---
+
+func doListThemes(args []string) {
+	// sax themes set <name>
+	if len(args) >= 2 && args[0] == "set" {
+		name := args[1]
+		if _, ok := config.ThemePresets[name]; !ok {
+			fmt.Fprintf(os.Stderr, "sax: unknown theme %q\n", name)
+			fmt.Fprintf(os.Stderr, "Available: %s\n", strings.Join(config.PresetNames(), ", "))
+			os.Exit(1)
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sax: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.ThemeName = name
+		cfg.Theme = config.ThemePresets[name]
+		if err := cfg.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "sax: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Theme set to %q. Restart sessions to apply.\n", name)
+		return
+	}
+
+	// sax themes — list available
+	cfg, _ := config.Load()
+	current := cfg.ThemeName
+	if current == "" {
+		current = "neon-blue"
+	}
+
+	fmt.Println("  Available themes:")
+	fmt.Println()
+	for _, name := range config.PresetNames() {
+		t := config.ThemePresets[name]
+		marker := "  "
+		if name == current {
+			marker = "* "
+		}
+		fmt.Printf("  %s%-20s  accent: %s  bg: %s\n", marker, name, t.Accent, t.Bg)
+	}
+	fmt.Println()
+	fmt.Printf("  Current: %s\n", current)
+	fmt.Println()
+	fmt.Println("  Apply:  sax themes set <name>")
+	fmt.Printf("  Config: %s\n", config.ConfigPath())
 }
 
 // --- Update ---
@@ -943,6 +1005,8 @@ func launchDaemon(name string, command []string) error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
+	// Force true color in the daemon process so lipgloss renders ANSI colors
+	cmd.Env = append(os.Environ(), "COLORTERM=truecolor")
 
 	setProcAttr(cmd)
 
