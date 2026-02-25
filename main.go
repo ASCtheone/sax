@@ -17,6 +17,7 @@ import (
 	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/nx"
 	"github.com/asc/sax/internal/server"
+	"github.com/asc/sax/internal/theme"
 	"github.com/asc/sax/internal/updater"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -843,6 +844,11 @@ func doServerMode(name string, command []string) {
 	if err == nil {
 		log.SetOutput(f)
 		defer f.Close()
+	}
+
+	// Load config and apply theme colors
+	if cfg, err := config.Load(); err == nil {
+		theme.Init(cfg.Theme)
 	}
 
 	srv := server.NewServer(name)

@@ -11,6 +11,7 @@ import (
 	"github.com/asc/sax/internal/session"
 	"github.com/asc/sax/internal/statusbar"
 	"github.com/asc/sax/internal/tabbar"
+	"github.com/asc/sax/internal/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -311,6 +312,11 @@ func (m *Model) compositePanes(tab *session.Tab, rects map[string]session.Rect, 
 	// Draw borders between panes
 	m.drawNodeBorders(tab.Layout, session.Rect{X: 0, Y: 0, W: width, H: height}, tab.ActivePane, grid)
 
+	// Classify borders as active/inactive using PUA markers
+	if ar, ok := rects[tab.ActivePane]; ok {
+		theme.ClassifyBorders(grid, ar.X, ar.Y, ar.W, ar.H, width, height)
+	}
+
 	// Build the output as string rows
 	rows := make([]string, height)
 	for y := 0; y < height; y++ {
@@ -343,6 +349,11 @@ func (m *Model) compositePanes(tab *session.Tab, rects map[string]session.Rect, 
 			}
 			rows[targetY] = string(rowRunes)
 		}
+	}
+
+	// Final pass: colorize border PUA markers
+	for y := range rows {
+		rows[y] = theme.ColorizeBorderRow(rows[y])
 	}
 
 	return strings.Join(rows, "\n")

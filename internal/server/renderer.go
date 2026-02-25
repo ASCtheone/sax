@@ -7,6 +7,9 @@ import (
 	"github.com/asc/sax/internal/session"
 	"github.com/asc/sax/internal/statusbar"
 	"github.com/asc/sax/internal/tabbar"
+	"github.com/asc/sax/internal/theme"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // RenderContext holds the state needed to render a frame.
@@ -116,6 +119,11 @@ func compositePanes(tab *session.Tab, rects map[string]session.Rect, renders map
 
 	drawNodeBorders(tab.Layout, session.Rect{X: 0, Y: 0, W: width, H: height}, grid)
 
+	// Classify borders as active/inactive using PUA markers
+	if ar, ok := rects[tab.ActivePane]; ok {
+		theme.ClassifyBorders(grid, ar.X, ar.Y, ar.W, ar.H, width, height)
+	}
+
 	rows := make([]string, height)
 	for y := 0; y < height; y++ {
 		rows[y] = string(grid[y])
@@ -146,6 +154,11 @@ func compositePanes(tab *session.Tab, rects map[string]session.Rect, renders map
 			}
 			rows[targetY] = string(rowRunes)
 		}
+	}
+
+	// Final pass: colorize border PUA markers
+	for y := range rows {
+		rows[y] = theme.ColorizeBorderRow(rows[y])
 	}
 
 	return strings.Join(rows, "\n")
@@ -195,86 +208,68 @@ func drawNodeBorders(node *session.LayoutNode, area session.Rect, grid [][]rune)
 	}
 }
 
-// renderCommandPanel generates the right-side command overlay panel lines.
-func renderCommandPanel(height int) []string {
-	panelW := 34
-	border := "\u2502" // │
-	hline := strings.Repeat("\u2500", panelW-2)
-	top := "\u250c" + hline + "\u2510"    // ┌───┐
-	bottom := "\u2514" + hline + "\u2518"  // └───┘
-	divider := "\u251c" + hline + "\u2524" // ├───┤
-
-	pad := func(s string) string {
-		gap := panelW - 2 - len(s)
-		if gap < 0 {
-			gap = 0
-			s = s[:panelW-2]
-		}
-		return border + s + strings.Repeat(" ", gap) + border
+// renderCommandPanel generates the right-side command overlay panel as a styled string.
+func renderCommandPanel(height int) string {
+	keyLine := func(key, desc string) string {
+		return " " + theme.CommandKeyStyle.Render(key) + "  " + desc
 	}
 
-	header := func(s string) string {
-		gap := panelW - 2 - len(s)
-		left := gap / 2
-		right := gap - left
-		if left < 0 {
-			left = 0
-		}
-		if right < 0 {
-			right = 0
-		}
-		return border + strings.Repeat(" ", left) + s + strings.Repeat(" ", right) + border
+	sectionHeader := func(title string) string {
+		return theme.CommandHeaderStyle.Render(title)
 	}
 
-	var lines []string
-	lines = append(lines, top)
-	lines = append(lines, header(" SAX Commands "))
-	lines = append(lines, header("Prefix: Ctrl+S"))
-	lines = append(lines, divider)
-	lines = append(lines, header("Tabs"))
-	lines = append(lines, pad(" c      New tab"))
-	lines = append(lines, pad(" n/p    Next/Prev tab"))
-	lines = append(lines, pad(" 1-9    Go to tab N"))
-	lines = append(lines, pad(" X      Close tab"))
-	lines = append(lines, pad(` "      Window list`))
-	lines = append(lines, divider)
-	lines = append(lines, header("Panes"))
-	lines = append(lines, pad(" v |    Split vertical"))
-	lines = append(lines, pad(" s -    Split horizontal"))
-	lines = append(lines, pad(" hjkl   Navigate panes"))
-	lines = append(lines, pad(" x      Close pane"))
-	lines = append(lines, pad(" z      Zoom pane"))
-	lines = append(lines, divider)
-	lines = append(lines, header("Session"))
-	lines = append(lines, pad(" d      Detach"))
-	lines = append(lines, pad(" [      Copy/scroll mode"))
-	lines = append(lines, pad(" ]      Paste"))
-	lines = append(lines, pad(" H      Toggle logging"))
-	lines = append(lines, pad(" ^x     Lock session"))
-	lines = append(lines, pad(" M      Monitor activity"))
-	lines = append(lines, pad(" _      Monitor silence"))
-	lines = append(lines, divider)
-	lines = append(lines, pad(" ^Q     Quit"))
-	lines = append(lines, pad(" ?      Toggle panel"))
-	lines = append(lines, bottom)
+	var content strings.Builder
+	content.WriteString(sectionHeader("  SAX Commands") + "\n")
+	content.WriteString("  Prefix: Ctrl+S\n")
+	content.WriteString("\n")
+	content.WriteString(sectionHeader("  Tabs") + "\n")
+	content.WriteString(keyLine("c", "New tab") + "\n")
+	content.WriteString(keyLine("n/p", "Next/Prev tab") + "\n")
+	content.WriteString(keyLine("1-9", "Go to tab N") + "\n")
+	content.WriteString(keyLine("X", "Close tab") + "\n")
+	content.WriteString(keyLine(`"`, "Window list") + "\n")
+	content.WriteString("\n")
+	content.WriteString(sectionHeader("  Panes") + "\n")
+	content.WriteString(keyLine("v |", "Split vertical") + "\n")
+	content.WriteString(keyLine("s -", "Split horizontal") + "\n")
+	content.WriteString(keyLine("hjkl", "Navigate panes") + "\n")
+	content.WriteString(keyLine("x", "Close pane") + "\n")
+	content.WriteString(keyLine("z", "Zoom pane") + "\n")
+	content.WriteString("\n")
+	content.WriteString(sectionHeader("  Session") + "\n")
+	content.WriteString(keyLine("d", "Detach") + "\n")
+	content.WriteString(keyLine("[", "Copy/scroll mode") + "\n")
+	content.WriteString(keyLine("]", "Paste") + "\n")
+	content.WriteString(keyLine("H", "Toggle logging") + "\n")
+	content.WriteString(keyLine("^x", "Lock session") + "\n")
+	content.WriteString(keyLine("M", "Monitor activity") + "\n")
+	content.WriteString(keyLine("_", "Monitor silence") + "\n")
+	content.WriteString("\n")
+	content.WriteString(keyLine("^Q", "Quit") + "\n")
+	content.WriteString(keyLine("?", "Toggle panel"))
 
-	// Truncate if panel is taller than available height
+	panel := theme.HelpStyle.Render(content.String())
+
+	// Truncate to available height
+	lines := strings.Split(panel, "\n")
 	if len(lines) > height {
 		lines = lines[:height]
 	}
 
-	return lines
+	return strings.Join(lines, "\n")
 }
 
-// overlayRight places overlay lines on the right side of the base frame.
-func overlayRight(base string, overlayLines []string, width, height int) string {
+// overlayRight places overlay text on the right side of the base frame (ANSI-aware).
+func overlayRight(base string, overlay string, width, height int) string {
 	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
 
 	oH := len(overlayLines)
 	oW := 0
 	for _, l := range overlayLines {
-		if len([]rune(l)) > oW {
-			oW = len([]rune(l))
+		w := lipgloss.Width(l)
+		if w > oW {
+			oW = w
 		}
 	}
 
@@ -292,19 +287,14 @@ func overlayRight(base string, overlayLines []string, width, height int) string 
 		if y >= len(baseLines) {
 			break
 		}
-		row := []rune(baseLines[y])
-		// Extend row if needed
-		for len(row) < width {
-			row = append(row, ' ')
+		// Truncate the base line at the overlay start position, then append overlay
+		truncated := ansi.Truncate(baseLines[y], startX, "")
+		// Pad truncated line to startX visual width
+		truncW := lipgloss.Width(truncated)
+		if truncW < startX {
+			truncated += strings.Repeat(" ", startX-truncW)
 		}
-		olRunes := []rune(ol)
-		for j, c := range olRunes {
-			x := startX + j
-			if x >= 0 && x < len(row) {
-				row[x] = c
-			}
-		}
-		baseLines[y] = string(row)
+		baseLines[y] = truncated + ol
 	}
 
 	return strings.Join(baseLines, "\n")
@@ -347,7 +337,7 @@ func renderLockScreen(ctx *RenderContext) string {
 	return strings.Join(result, "\n")
 }
 
-// overlayCenter places overlay text centered on top of the base frame.
+// overlayCenter places overlay text centered on top of the base frame (ANSI-aware).
 func overlayCenter(base, overlay string, width, height int) string {
 	baseLines := strings.Split(base, "\n")
 	overlayLines := strings.Split(overlay, "\n")
@@ -355,8 +345,9 @@ func overlayCenter(base, overlay string, width, height int) string {
 	oH := len(overlayLines)
 	oW := 0
 	for _, l := range overlayLines {
-		if len(l) > oW {
-			oW = len(l)
+		w := lipgloss.Width(l)
+		if w > oW {
+			oW = w
 		}
 	}
 
@@ -374,15 +365,31 @@ func overlayCenter(base, overlay string, width, height int) string {
 		if y >= len(baseLines) {
 			break
 		}
-		row := []rune(baseLines[y])
-		olRunes := []rune(ol)
-		for j, c := range olRunes {
-			x := startX + j
-			if x < len(row) {
-				row[x] = c
+		olW := lipgloss.Width(ol)
+		endX := startX + olW
+
+		// Left portion: truncate base at startX
+		left := ansi.Truncate(baseLines[y], startX, "")
+		leftW := lipgloss.Width(left)
+		if leftW < startX {
+			left += strings.Repeat(" ", startX-leftW)
+		}
+
+		// Right portion: skip past the overlay area in the base line
+		baseW := lipgloss.Width(baseLines[y])
+		right := ""
+		if endX < baseW {
+			// Truncate base to endX chars, then take what's after
+			full := baseLines[y]
+			truncatedToEnd := ansi.Truncate(full, endX, "")
+			truncEndW := lipgloss.Width(truncatedToEnd)
+			if truncEndW < baseW {
+				// Get remaining by cutting the prefix
+				right = ansi.Cut(full, endX, baseW)
 			}
 		}
-		baseLines[y] = string(row)
+
+		baseLines[y] = left + ol + right
 	}
 
 	return strings.Join(baseLines, "\n")
