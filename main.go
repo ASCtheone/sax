@@ -13,15 +13,36 @@ import (
 	"time"
 
 	"github.com/asc/sax/internal/client"
+	"github.com/asc/sax/internal/config"
 	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/nx"
 	"github.com/asc/sax/internal/server"
+	"github.com/asc/sax/internal/updater"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Set via ldflags at build time.
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func main() {
 	args := os.Args[1:]
+
+	// Version flag (earliest check)
+	if len(args) > 0 && (args[0] == "--version" || args[0] == "-v") {
+		fmt.Printf("sax %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
+
+	// Self-update command
+	if len(args) > 0 && args[0] == "update" {
+		doSelfUpdate()
+		return
+	}
 
 	// Internal server mode: sax --server -S <name> [--cmd <command...>]
 	if containsFlag(args, "--server") {
@@ -39,6 +60,9 @@ func main() {
 		doKillAll()
 		return
 	}
+
+	// Background update check (non-blocking, for user-facing commands only)
+	go checkForUpdateBackground()
 
 	// NX workspace subcommand: sax nx <command> [args...]
 	if len(args) > 0 && args[0] == "nx" {
@@ -264,6 +288,8 @@ usage: sax                          interactive session picker
        sax -l, --list               list active sessions
        sax --kill <name>            kill a session
        sax --kill-all               kill all sessions
+       sax update                   update sax to the latest release
+       sax --version, -v            show version
 
 agent: sax --tail <name> [n]        last N lines from active pane (default 10)
        sax --send <name> <text>     send text to active pane
@@ -828,6 +854,68 @@ func doServerMode(name string, command []string) {
 	}
 	if err := srv.Run(); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+// --- Update ---
+
+func doSelfUpdate() {
+	if version == "dev" {
+		fmt.Fprintln(os.Stderr, "sax: cannot update a dev build — install from a release binary")
+		os.Exit(1)
+	}
+
+	fmt.Printf("sax: checking for updates (current: %s)...\n", version)
+
+	latest, downloadURL, err := updater.CheckForUpdate(version)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sax: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !updater.IsNewer(version, latest) {
+		fmt.Printf("sax: already up to date (%s)\n", version)
+		return
+	}
+
+	fmt.Printf("sax: downloading %s...\n", latest)
+	if err := updater.DownloadAndReplace(downloadURL); err != nil {
+		fmt.Fprintf(os.Stderr, "sax: update failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("sax: updated %s -> %s\n", version, latest)
+}
+
+func checkForUpdateBackground() {
+	if version == "dev" {
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil || !cfg.AutoUpdate {
+		return
+	}
+
+	// If checked within the last 24 hours, use cached result
+	if time.Since(cfg.LastCheckTime) < 24*time.Hour {
+		if cfg.LatestVersion != "" && updater.IsNewer(version, cfg.LatestVersion) {
+			fmt.Fprintf(os.Stderr, "sax: update available %s -> %s (run 'sax update')\n", version, cfg.LatestVersion)
+		}
+		return
+	}
+
+	latest, _, err := updater.CheckForUpdate(version)
+	if err != nil {
+		return
+	}
+
+	cfg.LastCheckTime = time.Now()
+	cfg.LatestVersion = latest
+	_ = cfg.Save()
+
+	if updater.IsNewer(version, latest) {
+		fmt.Fprintf(os.Stderr, "sax: update available %s -> %s (run 'sax update')\n", version, latest)
 	}
 }
 

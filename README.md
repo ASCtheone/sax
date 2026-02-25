@@ -6,9 +6,21 @@ Sessions persist in the background. Detach, close the terminal, come back later 
 
 ## Install
 
-Download the latest binary from [Releases](https://github.com/ASCtheone/sax/releases) and add it to your PATH.
+**Linux / macOS** (one-liner):
 
-Or build from source:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ASCtheone/sax/main/install.sh | bash
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/ASCtheone/sax/main/install.ps1 | iex
+```
+
+**Manual**: Download the latest binary from [Releases](https://github.com/ASCtheone/sax/releases) and add it to your PATH.
+
+**From source**:
 
 ```bash
 go install github.com/asc/sax@latest
@@ -36,6 +48,8 @@ sax -xa <name> <command...>  run command + attach
 sax -l, --list               list active sessions
 sax --kill <name>            kill a session
 sax --kill-all               kill all sessions
+sax update                   update to latest release
+sax --version, -v            show version
 ```
 
 ## Keybindings
@@ -126,6 +140,20 @@ sax --send api "npm test\n"
 
 # Get structured session info
 sax --status api
+```
+
+## Updating
+
+SAX checks for updates once daily in the background and prints a notice to stderr if a new version is available. To update:
+
+```bash
+sax update
+```
+
+To check the current version:
+
+```bash
+sax --version
 ```
 
 ## Architecture
