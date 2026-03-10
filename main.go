@@ -835,7 +835,8 @@ func doSend(name, text string) {
 		fmt.Fprintf(os.Stderr, "sax: session %q not found\n", name)
 		os.Exit(1)
 	}
-	// Interpret \n as actual newlines for sending Enter
+	// Interpret escape sequences: \n → LF, \r → CR (Enter key in raw PTY)
+	text = strings.ReplaceAll(text, `\r`, "\r")
 	text = strings.ReplaceAll(text, `\n`, "\n")
 	reply := ipc.QuerySessionTyped(name, "send", text)
 	if reply == nil {
