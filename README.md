@@ -142,6 +142,73 @@ sax --send api "npm test\n"
 sax --status api
 ```
 
+## MCP Server
+
+SAX includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) server, letting AI agents manage terminal sessions programmatically.
+
+Start the MCP server:
+
+```bash
+sax mcp
+```
+
+### Configuration
+
+Add to your Claude Code config (`~/.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "sax": {
+      "command": "sax",
+      "args": ["mcp"],
+      "type": "stdio"
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `sax_list_sessions` | List all active sessions with status, clients, ports, and PIDs |
+| `sax_create_session` | Create a new background terminal session |
+| `sax_kill_session` | Kill a session by name |
+| `sax_kill_all` | Kill all running sessions |
+| `sax_tail` | Get the last N lines from a session's active pane |
+| `sax_send` | Send text or keystrokes to a session (`\n` for Enter) |
+| `sax_status` | Get detailed session status as JSON |
+| `sax_exec` | Run a command in a new background session |
+| `sax_launch` | Launch a GUI/desktop app (no PTY) with process tracking |
+| `sax_nx_list` | List NX workspace projects with serve targets |
+| `sax_nx_serve` | Start an NX project's serve target as a session |
+| `sax_nx_stop` | Stop a running NX session (or all) |
+
+### Examples
+
+An AI agent can use these tools to:
+
+```
+# Start a dev server and monitor it
+sax_exec(name="api", command="node server.js")
+sax_tail(name="api", lines=20)
+
+# Send a command to a running session
+sax_send(name="api", text="npm test\n")
+
+# Launch a desktop app
+sax_launch(name="myapp", command="/path/to/myapp")
+
+# Check what's running
+sax_list_sessions()
+
+# Manage NX monorepo services
+sax_nx_list()
+sax_nx_serve(app="frontend")
+sax_nx_stop(app="frontend")
+```
+
 ## Updating
 
 SAX checks for updates once daily in the background and prints a notice to stderr if a new version is available. To update:
