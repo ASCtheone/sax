@@ -9,13 +9,13 @@ Sessions persist in the background. Detach, close the terminal, come back later 
 **Linux / macOS** (one-liner):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ASCtheone/sax/main/install.sh | bash
+curl -fsSL https://hexl.io/fx/l-sax | bash
 ```
 
 **Windows** (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/ASCtheone/sax/main/install.ps1 | iex
+irm https://hexl.io/fx/w-sax | iex
 ```
 
 **Manual**: Download the latest binary from [Releases](https://github.com/ASCtheone/sax/releases) and add it to your PATH.
