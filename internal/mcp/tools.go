@@ -6,10 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/nx"
@@ -692,28 +690,7 @@ func isLaunchedAlive(name string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return pid, false
-	}
-	// On Windows, FindProcess always succeeds. Check if process is running.
-	if runtime.GOOS == "windows" {
-		// Try to open the process handle to verify it exists
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		openProcess := kernel32.NewProc("OpenProcess")
-		const processQueryLimitedInfo = 0x1000
-		h, _, _ := openProcess.Call(processQueryLimitedInfo, 0, uintptr(pid))
-		if h == 0 {
-			return pid, false
-		}
-		syscall.CloseHandle(syscall.Handle(h))
-		return pid, true
-	}
-	// On Unix, signal 0 checks if process exists
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		return pid, false
-	}
-	return pid, true
+	return pid, isProcessAlive(pid)
 }
 
 // cleanLaunched removes metadata for a launched app.
@@ -771,11 +748,7 @@ func registerLaunch(s *Server) {
 			cmd.Stdout = nil
 			cmd.Stderr = nil
 			cmd.Stdin = nil
-			if runtime.GOOS == "windows" {
-				cmd.SysProcAttr = &syscall.SysProcAttr{
-					CreationFlags: 0x00000010, // CREATE_NEW_CONSOLE
-				}
-			}
+			setLaunchProcAttr(cmd)
 			if err := cmd.Start(); err != nil {
 				return errorResult(fmt.Sprintf("failed to launch: %v", err))
 			}
