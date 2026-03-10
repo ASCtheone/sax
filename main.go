@@ -42,7 +42,8 @@ func main() {
 
 	// Self-update command
 	if len(args) > 0 && args[0] == "update" {
-		doSelfUpdate()
+		force := len(args) > 1 && args[1] == "--force"
+		doSelfUpdate(force)
 		return
 	}
 
@@ -957,9 +958,9 @@ func doListThemes(args []string) {
 
 // --- Update ---
 
-func doSelfUpdate() {
-	if version == "dev" {
-		fmt.Fprintln(os.Stderr, "sax: cannot update a dev build — install from a release binary")
+func doSelfUpdate(force bool) {
+	if version == "dev" && !force {
+		fmt.Fprintln(os.Stderr, "sax: cannot update a dev build — install from a release binary (use --force to override)")
 		os.Exit(1)
 	}
 
@@ -971,7 +972,7 @@ func doSelfUpdate() {
 		os.Exit(1)
 	}
 
-	if !updater.IsNewer(version, latest) {
+	if !force && !updater.IsNewer(version, latest) {
 		fmt.Printf("sax: already up to date (%s)\n", version)
 		return
 	}
