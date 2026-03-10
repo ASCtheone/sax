@@ -25,6 +25,14 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
+# Kill running sax processes to release file lock
+$running = Get-Process -Name "sax" -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "Stopping running sax processes..."
+    $running | Stop-Process -Force
+    Start-Sleep -Seconds 2
+}
+
 $OutFile = Join-Path $InstallDir "sax.exe"
 Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
 
