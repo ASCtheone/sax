@@ -25,10 +25,10 @@ type Pane struct {
 }
 
 // NewPane creates a new Pane and starts a PTY in it.
-func NewPane(cols, rows int) (*Pane, error) {
+func NewPane(cols, rows int, workDir string) (*Pane, error) {
 	id := nextPaneID()
 
-	proc, err := pty.Start(cols, rows)
+	proc, err := pty.Start(cols, rows, workDir)
 	if err != nil {
 		return nil, fmt.Errorf("start pty: %w", err)
 	}
@@ -44,10 +44,10 @@ func NewPane(cols, rows int) (*Pane, error) {
 }
 
 // NewPaneWithCommand creates a new Pane running a specific command.
-func NewPaneWithCommand(cols, rows int, name string, args []string) (*Pane, error) {
+func NewPaneWithCommand(cols, rows int, name string, args []string, workDir string) (*Pane, error) {
 	id := nextPaneID()
 
-	proc, err := pty.StartCommand(cols, rows, name, args)
+	proc, err := pty.StartCommand(cols, rows, name, args, workDir)
 	if err != nil {
 		return nil, fmt.Errorf("start command: %w", err)
 	}

@@ -44,6 +44,10 @@ type ClientConn struct {
 
 	// Copy mode navigator (set when in copy mode)
 	copyNav *scrollback.Navigator
+
+	// Mouse wheel scrollback
+	scrollOffset int  // 0 = live (bottom), >0 = scrolled up N lines
+	scrollMode   bool // true when showing scrollback overlay
 }
 
 var clientCounter atomic.Uint64
@@ -149,6 +153,19 @@ func (cc *ClientConn) sendFrame() {
 		return
 	}
 
+	// Scrollback overlay mode — show scrollback lines instead of live terminal
+	if cc.scrollMode && cc.scrollOffset > 0 {
+		frame := cc.renderScrollback(w, h)
+		cc.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+		_ = cc.writer.WriteMsg(MsgFrame, &FrameMsg{
+			Content: frame,
+			W:       w,
+			H:       h,
+		})
+		cc.conn.SetWriteDeadline(time.Time{})
+		return
+	}
+
 	var mode statusbar.Mode
 	if cc.prefixMode {
 		mode = statusbar.ModePrefix
@@ -220,6 +237,13 @@ func (cc *ClientConn) dispatch(env *Envelope) {
 			return
 		}
 		cc.handleCommand(msg)
+
+	case MsgMouseWheel:
+		var msg MouseWheelMsg
+		if err := DecodeData(env, &msg); err != nil {
+			return
+		}
+		cc.handleMouseWheel(msg)
 	}
 }
 
@@ -264,6 +288,13 @@ func (cc *ClientConn) handleKeyInput(msg KeyInputMsg) {
 	if cc.copyMode && cc.copyNav != nil {
 		cc.handleCopyModeInput(msg.Data)
 		return
+	}
+
+	// Any key input exits scroll mode
+	if cc.scrollMode {
+		cc.scrollMode = false
+		cc.scrollOffset = 0
+		cc.MarkDirty()
 	}
 
 	pane := cc.ms.Session.ActivePane()
@@ -338,6 +369,40 @@ func (cc *ClientConn) handleCopyModeInput(data []byte) {
 		}
 		cc.MarkDirty()
 	}
+}
+
+// handleMouseWheel scrolls the scrollback buffer.
+func (cc *ClientConn) handleMouseWheel(msg MouseWheelMsg) {
+	pane := cc.ms.Session.ActivePane()
+	if pane == nil {
+		return
+	}
+
+	lines := msg.Lines
+	if lines <= 0 {
+		lines = 3
+	}
+
+	totalLines := pane.Term.Scrollback.LineCount()
+	if totalLines == 0 {
+		return
+	}
+
+	if msg.Up {
+		cc.scrollOffset += lines
+		if cc.scrollOffset > totalLines {
+			cc.scrollOffset = totalLines
+		}
+		cc.scrollMode = true
+	} else {
+		cc.scrollOffset -= lines
+		if cc.scrollOffset <= 0 {
+			cc.scrollOffset = 0
+			cc.scrollMode = false
+		}
+	}
+
+	cc.MarkDirty()
 }
 
 // handleResize processes a terminal resize from the client.
@@ -636,6 +701,71 @@ func (cc *ClientConn) handleLockInput(data []byte) {
 			}
 		}
 	}
+}
+
+// renderScrollback renders a scrollback view with a status indicator.
+func (cc *ClientConn) renderScrollback(w, h int) string {
+	pane := cc.ms.Session.ActivePane()
+	if pane == nil {
+		return ""
+	}
+
+	allLines := pane.Term.Scrollback.AllLines()
+	total := len(allLines)
+	if total == 0 {
+		return ""
+	}
+
+	// Reserve 1 line for the scrollback indicator bar
+	viewH := h - 1
+
+	// Calculate the window of lines to show
+	endIdx := total - cc.scrollOffset
+	if endIdx < 0 {
+		endIdx = 0
+	}
+	startIdx := endIdx - viewH
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	var rows []string
+	for i := startIdx; i < endIdx && i < total; i++ {
+		line := allLines[i]
+		// Truncate to width
+		if len(line) > w {
+			line = line[:w]
+		}
+		// Pad to width
+		if len(line) < w {
+			line = line + strings.Repeat(" ", w-len(line))
+		}
+		rows = append(rows, line)
+	}
+
+	// Pad remaining view lines
+	for len(rows) < viewH {
+		rows = append(rows, strings.Repeat(" ", w))
+	}
+
+	// Scrollback indicator bar
+	pct := 0
+	if total > 0 {
+		pct = (total - cc.scrollOffset) * 100 / total
+	}
+	indicator := fmt.Sprintf(" [SCROLLBACK: line %d/%d (%d%%)] ↑↓ scroll | any key to exit ", total-cc.scrollOffset, total, pct)
+	if len(indicator) > w {
+		indicator = indicator[:w]
+	}
+	if len(indicator) < w {
+		indicator = indicator + strings.Repeat(" ", w-len(indicator))
+	}
+	// Yellow background for indicator
+	indicator = "\x1b[30;43m" + indicator + "\x1b[0m"
+
+	rows = append(rows, indicator)
+
+	return strings.Join(rows, "\n")
 }
 
 func maskString(s string) string {

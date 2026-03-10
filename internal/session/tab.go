@@ -23,8 +23,8 @@ type Tab struct {
 }
 
 // NewTab creates a new tab with a single pane.
-func NewTab(cols, rows int) (*Tab, error) {
-	pane, err := NewPane(cols, rows)
+func NewTab(cols, rows int, workDir string) (*Tab, error) {
+	pane, err := NewPane(cols, rows, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -42,8 +42,8 @@ func NewTab(cols, rows int) (*Tab, error) {
 }
 
 // NewTabWithCommand creates a new tab running a specific command.
-func NewTabWithCommand(cols, rows int, cmdName string, args []string) (*Tab, error) {
-	pane, err := NewPaneWithCommand(cols, rows, cmdName, args)
+func NewTabWithCommand(cols, rows int, cmdName string, args []string, workDir string) (*Tab, error) {
+	pane, err := NewPaneWithCommand(cols, rows, cmdName, args, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (t *Tab) SplitActive(dir SplitDir, cols, rows int) (*Pane, error) {
 		return nil, fmt.Errorf("maximum 4 panes per tab")
 	}
 
-	newPane, err := NewPane(cols, rows)
+	newPane, err := NewPane(cols, rows, "")
 	if err != nil {
 		return nil, err
 	}

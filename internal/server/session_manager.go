@@ -46,7 +46,7 @@ func NewSessionManager() *SessionManager {
 
 // Create creates a new named session. If cmdName is non-empty, the initial
 // pane runs that command instead of the default shell.
-func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs []string) (*ManagedSession, error) {
+func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs []string, workDir string) (*ManagedSession, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -58,9 +58,9 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 	var sess *session.Session
 	var err error
 	if cmdName != "" {
-		sess, err = session.NewSessionWithCommand(w, paneH, cmdName, cmdArgs)
+		sess, err = session.NewSessionWithCommand(w, paneH, cmdName, cmdArgs, workDir)
 	} else {
-		sess, err = session.NewSession(w, paneH)
+		sess, err = session.NewSession(w, paneH, workDir)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)

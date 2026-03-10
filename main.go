@@ -15,6 +15,7 @@ import (
 	"github.com/asc/sax/internal/client"
 	"github.com/asc/sax/internal/config"
 	"github.com/asc/sax/internal/ipc"
+	"github.com/asc/sax/internal/mcp"
 	"github.com/asc/sax/internal/nx"
 	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/theme"
@@ -45,20 +46,27 @@ func main() {
 		return
 	}
 
+	// MCP server mode
+	if len(args) > 0 && args[0] == "mcp" {
+		doMCP()
+		return
+	}
+
 	// Theme listing command
 	if len(args) > 0 && (args[0] == "themes" || args[0] == "theme") {
 		doListThemes(args[1:])
 		return
 	}
 
-	// Internal server mode: sax --server -S <name> [--cmd <command...>]
+	// Internal server mode: sax --server -S <name> [--dir <path>] [--cmd <command...>]
 	if containsFlag(args, "--server") {
 		name := flagValue(args, "-S")
 		if name == "" {
 			name = ipc.DefaultSessionName()
 		}
+		serverWorkDir := flagValue(args, "--dir")
 		cmdParts := flagValueRest(args, "--cmd")
-		doServerMode(name, cmdParts)
+		doServerMode(name, cmdParts, serverWorkDir)
 		return
 	}
 
@@ -171,7 +179,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "  usage: sax -x <name> <command...>")
 			os.Exit(1)
 		}
-		doExecSession(parsed.name, parsed.command, parsed.attach)
+		doExecSession(parsed.name, parsed.command, parsed.attach, parsed.workDir)
 
 	case parsed.create:
 		if parsed.name == "" {
@@ -205,12 +213,25 @@ type parsedArgs struct {
 	kill    bool
 	name    string
 	command []string
+	workDir string
 }
 
 func parseArgs(args []string) parsedArgs {
 	var p parsedArgs
-	i := 0
 
+	// Pre-extract --dir before main parsing (so -x doesn't swallow it as command)
+	var filtered []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--dir" && i+1 < len(args) {
+			p.workDir = args[i+1]
+			i++ // skip value
+		} else {
+			filtered = append(filtered, args[i])
+		}
+	}
+	args = filtered
+
+	i := 0
 	for i < len(args) {
 		arg := args[i]
 
@@ -297,6 +318,7 @@ usage: sax                          interactive session picker
        sax --kill-all               kill all sessions
        sax themes                   list available color themes
        sax themes set <name>        apply a theme preset
+       sax mcp                      start MCP server (stdio, for AI agents)
        sax update                   update sax to the latest release
        sax --version, -v            show version
 
@@ -565,7 +587,7 @@ func doCreateSession(name string, attach bool) {
 		return
 	}
 
-	if err := launchDaemon(name, nil); err != nil {
+	if err := launchDaemon(name, nil, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -590,13 +612,13 @@ func doAttach(name string) {
 	connectClient(name)
 }
 
-func doExecSession(name string, command []string, attach bool) {
+func doExecSession(name string, command []string, attach bool, workDir string) {
 	if ipc.IsSessionAlive(name) {
 		fmt.Fprintf(os.Stderr, "sax: session %q already exists\n", name)
 		os.Exit(1)
 	}
 
-	if err := launchDaemon(name, command); err != nil {
+	if err := launchDaemon(name, command, workDir); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -653,7 +675,7 @@ func nxLaunchProject(project nx.Project, targetName string) {
 		return
 	}
 
-	if err := launchDaemon(sessionName, cmd); err != nil {
+	if err := launchDaemon(sessionName, cmd, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "  failed to start %s: %v\n", sessionName, err)
 		return
 	}
@@ -846,7 +868,13 @@ func doStatus(name string) {
 	fmt.Println(string(out))
 }
 
-func doServerMode(name string, command []string) {
+func doMCP() {
+	srv := mcp.NewServer("sax", version)
+	mcp.RegisterAllTools(srv, launchDaemon, waitForSession)
+	srv.Run()
+}
+
+func doServerMode(name string, command []string, workDir string) {
 	// Force true color rendering — server runs as headless daemon without a TTY,
 	// so termenv/lipgloss would otherwise detect no color support.
 	os.Setenv("COLORTERM", "truecolor")
@@ -864,6 +892,7 @@ func doServerMode(name string, command []string) {
 	}
 
 	srv := server.NewServer(name)
+	srv.InitWorkDir = workDir
 	if len(command) > 0 {
 		srv.InitCmd = command[0]
 		if len(command) > 1 {
@@ -989,13 +1018,16 @@ func checkForUpdateBackground() {
 
 // --- Helpers ---
 
-func launchDaemon(name string, command []string) error {
+func launchDaemon(name string, command []string, workDir string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get executable: %w", err)
 	}
 
 	cmdArgs := []string{"--server", "-S", name}
+	if workDir != "" {
+		cmdArgs = append(cmdArgs, "--dir", workDir)
+	}
 	if len(command) > 0 {
 		cmdArgs = append(cmdArgs, "--cmd")
 		cmdArgs = append(cmdArgs, command...)

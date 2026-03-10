@@ -3,6 +3,7 @@ package pty
 import (
 	"io"
 	"os"
+	"os/exec"
 	"sync"
 
 	gopty "github.com/aymanbagabas/go-pty"
@@ -15,17 +16,22 @@ type Process struct {
 }
 
 // Start spawns a new PTY with the detected shell.
-func Start(cols, rows int) (*Process, error) {
+func Start(cols, rows int, workDir string) (*Process, error) {
 	shell, args := DetectShell()
-	return startProcess(cols, rows, shell, args[1:])
+	return startProcess(cols, rows, shell, args[1:], workDir)
 }
 
 // StartCommand spawns a new PTY running a specific command.
-func StartCommand(cols, rows int, name string, args []string) (*Process, error) {
-	return startProcess(cols, rows, name, args)
+func StartCommand(cols, rows int, name string, args []string, workDir string) (*Process, error) {
+	return startProcess(cols, rows, name, args, workDir)
 }
 
-func startProcess(cols, rows int, name string, args []string) (*Process, error) {
+func startProcess(cols, rows int, name string, args []string, workDir string) (*Process, error) {
+	// Resolve command path (handles .cmd, .bat, .exe on Windows)
+	if resolved, err := exec.LookPath(name); err == nil {
+		name = resolved
+	}
+
 	p, err := gopty.New()
 	if err != nil {
 		return nil, err
@@ -38,6 +44,9 @@ func startProcess(cols, rows int, name string, args []string) (*Process, error) 
 
 	cmd := p.Command(name, args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
 
 	if err := cmd.Start(); err != nil {
 		p.Close()

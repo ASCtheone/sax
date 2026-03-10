@@ -138,7 +138,7 @@ func (m *Model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.height = msg.Height
 
 	if !m.ready {
-		sess, err := session.NewSession(msg.Width, msg.Height-2)
+		sess, err := session.NewSession(msg.Width, msg.Height-2, "")
 		if err != nil {
 			return m, tea.Quit
 		}

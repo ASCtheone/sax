@@ -95,8 +95,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		// Forward mouse events as key input bytes
-		return m, nil
+		return m.handleMouse(msg)
 
 	case frameMsg:
 		m.frame = msg.content
@@ -303,6 +302,21 @@ func (m *Model) handlePrefixKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// handleMouse processes mouse events, sending wheel scrolls to the server.
+func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.MouseWheelUp:
+		_ = m.writer.WriteMsg(server.MsgMouseWheel, &server.MouseWheelMsg{
+			Up: true, Lines: 3,
+		})
+	case tea.MouseWheelDown:
+		_ = m.writer.WriteMsg(server.MsgMouseWheel, &server.MouseWheelMsg{
+			Up: false, Lines: 3,
+		})
+	}
+	return m, nil
 }
 
 // readServerMessages starts a goroutine to read messages from the server.

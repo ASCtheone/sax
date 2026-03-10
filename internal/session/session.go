@@ -11,8 +11,8 @@ type Session struct {
 }
 
 // NewSession creates a new session with one tab.
-func NewSession(cols, rows int) (*Session, error) {
-	tab, err := NewTab(cols, rows)
+func NewSession(cols, rows int, workDir string) (*Session, error) {
+	tab, err := NewTab(cols, rows, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -26,8 +26,8 @@ func NewSession(cols, rows int) (*Session, error) {
 }
 
 // NewSessionWithCommand creates a new session running a specific command.
-func NewSessionWithCommand(cols, rows int, name string, args []string) (*Session, error) {
-	tab, err := NewTabWithCommand(cols, rows, name, args)
+func NewSessionWithCommand(cols, rows int, name string, args []string, workDir string) (*Session, error) {
+	tab, err := NewTabWithCommand(cols, rows, name, args, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (s *Session) ActivePane() *Pane {
 func (s *Session) AddTab() (*Tab, error) {
 	// Calculate pane area (minus tab bar and status bar)
 	cols, rows := s.PaneArea()
-	tab, err := NewTab(cols, rows)
+	tab, err := NewTab(cols, rows, "")
 	if err != nil {
 		return nil, err
 	}

@@ -25,6 +25,7 @@ type Server struct {
 	// Initial command to run instead of default shell (empty = shell)
 	InitCmd     string
 	InitCmdArgs []string
+	InitWorkDir string
 }
 
 // NewServer creates a new server for the named session.
@@ -125,7 +126,7 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Get or create the managed session
 	ms := s.sessions.Get(s.name)
 	if ms == nil {
-		ms, err = s.sessions.Create(s.name, attach.W, attach.H, s.InitCmd, s.InitCmdArgs)
+		ms, err = s.sessions.Create(s.name, attach.W, attach.H, s.InitCmd, s.InitCmdArgs, s.InitWorkDir)
 		if err != nil {
 			log.Printf("failed to create session: %v", err)
 			_ = WriteMsg(conn, MsgError, &ErrorMsg{Message: err.Error()})

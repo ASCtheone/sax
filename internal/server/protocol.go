@@ -16,6 +16,7 @@ const (
 	MsgCopyModeInput = "copy_mode_input"
 	MsgAttach        = "attach"
 	MsgQuery         = "query"
+	MsgMouseWheel    = "mouse_wheel"
 )
 
 // Message types for server → client
@@ -93,6 +94,12 @@ type CommandMsg struct {
 type CopyModeInputMsg struct {
 	Action string `json:"action"`
 	Count  int    `json:"count,omitempty"`
+}
+
+// MouseWheelMsg carries mouse wheel scroll events.
+type MouseWheelMsg struct {
+	Up    bool `json:"up"`    // true = scroll up, false = scroll down
+	Lines int  `json:"lines"` // number of lines to scroll
 }
 
 // AttachMsg is the initial handshake from the client.
