@@ -103,6 +103,66 @@ Enter with `Ctrl+S [`. Navigate with vim keys:
 | `/` | Search |
 | `q` / `Esc` | Exit copy mode |
 
+## Configuration (`~/.saxrc`)
+
+SAX reads a zsh-flavored config file on startup. It's a simple line-based DSL —
+configure your shell, theme, environment, keybindings, and startup layout.
+
+**Location** (first match wins):
+
+1. `$SAXRC` if set
+2. `~/.saxrc`
+3. `<config-dir>/saxrc` (`%APPDATA%\sax\saxrc` on Windows, `~/.sax/saxrc` elsewhere)
+
+A missing file is fine — defaults apply. Malformed lines are skipped with a
+warning (logged to the session log), never a crash.
+
+### Example
+
+```sh
+# Options
+set shell zsh                 # default shell for new panes
+set prefix C-a                # prefix key (default C-s). C=ctrl M=alt S=shift
+set theme tokyo-night         # neon-blue | gruvbox | catppuccin-mocha | tokyo-night
+set theme.accent #ff9e64      # override individual theme colors
+set history-limit 10000       # scrollback lines per pane
+set default-dir ~/code        # cwd for new sessions when --dir is not given
+
+# Environment — injected into every pane
+setenv EDITOR nvim
+export PAGER=less
+
+# Keybindings (in prefix mode)
+bind | split-v
+bind - split-h
+# unbind '"'                  # remove a default binding
+
+# Startup
+run "split-v"                 # build a layout when a session is created
+hook new-pane "echo welcome"  # shell command typed into every new pane
+```
+
+A fully commented example lives in [`examples/saxrc`](examples/saxrc).
+
+### Directives
+
+| Directive | Purpose |
+|-----------|---------|
+| `set <key> <value>` | Options: `shell`, `prefix`, `theme`, `theme.<field>`, `history-limit`, `default-dir`, `mouse` |
+| `setenv KEY value` / `export KEY=value` | Environment variables for spawned panes |
+| `bind <key> <command>` / `unbind <key>` | Customize prefix-mode keybindings |
+| `hook new-pane "<cmd>"` | Shell command typed into each new pane (like `.zshrc`) |
+| `run "<cmd>"` | Layout command run at session start (`split-v`, `split-h`, `new-tab`, `select-tab N`) |
+| `source <path>` | Include another `.saxrc` file |
+
+**Bindable commands:** `new-tab` `next-tab` `prev-tab` `select-tab N` `close-tab`
+`split-v` `split-h` `pane-left` `pane-right` `pane-up` `pane-down` `close-pane`
+`zoom` `detach` `copy-mode` `paste` `window-list` `toggle-log` `lock`
+`monitor-activity` `monitor-silence` `help`.
+
+Key specs use `C-`/`M-`/`S-` modifier prefixes (e.g. `C-a`, `M-x`). Changes take
+effect on newly created sessions.
+
 ## NX Workspace
 
 SAX can discover and launch dev servers from NX monorepo workspaces.

@@ -116,7 +116,7 @@ func (t *Tracker) recombine() {
 	for port, lp := range t.systemPorts {
 		seen[port] = true
 		// Only include ports that are also detected via regex or are in common dev ranges
-		if t.regexPorts[port] || isDevPort(port) {
+		if t.regexPorts[port] {
 			combined = append(combined, lp)
 		}
 	}
@@ -134,12 +134,4 @@ func (t *Tracker) recombine() {
 	if t.onChange != nil {
 		t.onChange(combined)
 	}
-}
-
-func isDevPort(port int) bool {
-	// Common development ports
-	return (port >= 3000 && port <= 3999) ||
-		(port >= 4000 && port <= 4999) ||
-		(port >= 5000 && port <= 5999) ||
-		(port >= 8000 && port <= 9999)
 }

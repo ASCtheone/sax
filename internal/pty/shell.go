@@ -6,8 +6,31 @@ import (
 	"runtime"
 )
 
-// DetectShell returns the default shell for the current platform.
+// shellOverride and extraEnv are daemon-wide spawn defaults sourced from
+// ~/.saxrc. They are set once via Configure at server startup, before any
+// session is created, and treated as read-only thereafter.
+var (
+	shellOverride string
+	extraEnv      []string
+)
+
+// Configure sets daemon-wide spawn defaults from .saxrc. shell is a shell name
+// or path ("set shell"); env is a list of "KEY=VALUE" strings injected into
+// every pane. Call once at startup, before the first session is created.
+func Configure(shell string, env []string) {
+	shellOverride = shell
+	extraEnv = append([]string(nil), env...)
+}
+
+// DetectShell returns the default shell for the current platform, honoring a
+// "set shell" override from .saxrc when present and resolvable.
 func DetectShell() (string, []string) {
+	if shellOverride != "" {
+		if path, err := exec.LookPath(shellOverride); err == nil {
+			return path, []string{shellOverride}
+		}
+		// Fall through to platform detection if the override can't be found.
+	}
 	switch runtime.GOOS {
 	case "windows":
 		return detectWindowsShell()

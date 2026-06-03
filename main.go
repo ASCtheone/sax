@@ -13,10 +13,14 @@ import (
 	"time"
 
 	"github.com/asc/sax/internal/client"
+	"github.com/asc/sax/internal/completion"
 	"github.com/asc/sax/internal/config"
 	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/mcp"
 	"github.com/asc/sax/internal/nx"
+	"github.com/asc/sax/internal/pty"
+	"github.com/asc/sax/internal/saxrc"
+	"github.com/asc/sax/internal/scrollback"
 	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/theme"
 	"github.com/asc/sax/internal/updater"
@@ -56,6 +60,28 @@ func main() {
 	// Theme listing command
 	if len(args) > 0 && (args[0] == "themes" || args[0] == "theme") {
 		doListThemes(args[1:])
+		return
+	}
+
+	// Completion machinery. These run on every Tab press, so they are handled
+	// before the background update check to stay fast and produce no stray
+	// stderr output.
+	if len(args) >= 2 && args[0] == "nx" && args[1] == "__complete" {
+		doNxComplete(args[2:])
+		return
+	}
+	if len(args) > 0 && args[0] == "__complete" {
+		doComplete(args[1:])
+		return
+	}
+	if len(args) > 0 && args[0] == "completion" {
+		doCompletion(args[1:])
+		return
+	}
+
+	// Setup commands (e.g. shell completion profile wiring).
+	if len(args) > 0 && args[0] == "setup" {
+		doSetup(args[1:])
 		return
 	}
 
@@ -102,8 +128,10 @@ func main() {
 				}
 				doNxStop(app)
 			default:
-				// Treat as app name: sax nx <app> → sax nx serve <app>
-				doNxServe(nxArgs[0])
+				// Anything that isn't a sax-managed verb passes through to
+				// the real nx, so `sax nx build app`, `sax nx test`,
+				// `sax nx generate ...` behave like native nx.
+				doNxPassthrough(nxArgs)
 			}
 		}
 		return
@@ -811,6 +839,126 @@ func doNxStop(app string) {
 	}
 }
 
+// doNxPassthrough runs the real nx with the given arguments in the foreground,
+// inheriting stdio so it behaves exactly like invoking nx directly.
+func doNxPassthrough(args []string) {
+	bin, base := nx.Resolve()
+	cmd := exec.Command(bin, append(base, args...)...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Fprintf(os.Stderr, "sax: nx: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// --- Completion ---
+
+// doCompletion prints the shell completion script for the given shell.
+func doCompletion(args []string) {
+	shell := ""
+	if len(args) > 0 {
+		shell = args[0]
+	}
+	script, err := completion.Script(shell)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sax: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Print(script)
+}
+
+// doComplete prints sax completion candidates (one per line) for the hidden
+// __complete protocol the generated shell scripts call.
+func doComplete(args []string) {
+	for _, c := range completion.SaxCandidates(args) {
+		fmt.Println(c)
+	}
+}
+
+// doNxComplete prints nx completion candidates (one per line).
+func doNxComplete(args []string) {
+	for _, c := range completion.NxCandidates(args) {
+		fmt.Println(c)
+	}
+}
+
+// --- Setup ---
+
+func doSetup(args []string) {
+	if len(args) == 0 {
+		printSetupUsage()
+		return
+	}
+	switch args[0] {
+	case "completion":
+		doSetupCompletion(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "sax: unknown setup command %q\n", args[0])
+		printSetupUsage()
+		os.Exit(1)
+	}
+}
+
+func printSetupUsage() {
+	fmt.Fprintln(os.Stderr, `usage: sax setup completion [--shell <zsh|bash|pwsh>] [--install]
+       (without --install, prints what to add to your shell profile)`)
+}
+
+// doSetupCompletion installs (or shows how to install) sax shell completion in
+// the user's shell profile.
+func doSetupCompletion(args []string) {
+	shell := ""
+	install := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--shell":
+			if i+1 < len(args) {
+				shell = args[i+1]
+				i++
+			}
+		case "--install":
+			install = true
+		}
+	}
+	if shell == "" {
+		shell = completion.DetectShell()
+	}
+
+	if !install {
+		path, _ := completion.ProfilePath(shell)
+		fmt.Printf("Detected shell: %s\n", shell)
+		if path != "" {
+			fmt.Printf("Add sax completion to your profile (%s) by running:\n\n", path)
+		}
+		fmt.Printf("  sax setup completion --shell %s --install\n\n", shell)
+		fmt.Println("Or load it for the current session only:")
+		switch shell {
+		case "pwsh", "powershell":
+			fmt.Println("  sax completion pwsh | Out-String | Invoke-Expression")
+		default:
+			fmt.Printf("  source <(sax completion %s)\n", shell)
+		}
+		return
+	}
+
+	path, changed, err := completion.InstallToProfile(shell)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sax: %v\n", err)
+		os.Exit(1)
+	}
+	if changed {
+		fmt.Printf("Installed sax completion for %s in %s\n", shell, path)
+	} else {
+		fmt.Printf("sax completion for %s already up to date in %s\n", shell, path)
+	}
+	fmt.Println("Restart your shell or re-source the profile to activate it.")
+}
+
 // --- Agent commands ---
 
 func doTail(name string, n int) {
@@ -876,6 +1024,44 @@ func doMCP() {
 	srv.Run()
 }
 
+// resolveTheme layers .saxrc theme settings on top of the saved config theme:
+// "set theme <preset>" swaps the base palette, and "set theme.<field> <color>"
+// overrides individual colors. Returns a new Theme; the input is not mutated.
+func resolveTheme(base config.Theme, rc *saxrc.Config) config.Theme {
+	t := base
+	if name := rc.ThemeName(); name != "" {
+		if preset, ok := config.ThemePresets[name]; ok {
+			t = preset
+		}
+	}
+	for field, val := range rc.ThemeOverrides() {
+		if val == "" {
+			continue
+		}
+		switch field {
+		case "bg":
+			t.Bg = val
+		case "fg":
+			t.Fg = val
+		case "fg_muted", "fg-muted":
+			t.FgMuted = val
+		case "accent":
+			t.Accent = val
+		case "accent_secondary", "accent-secondary":
+			t.AccentSecondary = val
+		case "surface":
+			t.Surface = val
+		case "surface_dark", "surface-dark":
+			t.SurfaceDark = val
+		case "success":
+			t.Success = val
+		case "border_inactive", "border-inactive":
+			t.BorderInactive = val
+		}
+	}
+	return t
+}
+
 func doServerMode(name string, command []string, workDir string) {
 	// Force true color rendering — server runs as headless daemon without a TTY,
 	// so termenv/lipgloss would otherwise detect no color support.
@@ -888,12 +1074,32 @@ func doServerMode(name string, command []string, workDir string) {
 		defer f.Close()
 	}
 
-	// Load config and apply theme colors
+	// Load ~/.saxrc (zsh-style config). A missing file yields an empty config;
+	// parse problems are logged as warnings and never block startup.
+	rc := saxrc.Load()
+	for _, w := range rc.Warnings {
+		log.Printf("saxrc: %s", w)
+	}
+
+	// Load config and apply theme colors, with .saxrc overrides layered on top.
 	if cfg, err := config.Load(); err == nil {
-		theme.Init(cfg.Theme)
+		theme.Init(resolveTheme(cfg.Theme, rc))
+	}
+
+	// Apply daemon-wide options from .saxrc.
+	if n, ok := rc.HistoryLimit(); ok {
+		scrollback.SetDefaultCapacity(n)
+	}
+	pty.Configure(rc.Shell(), rc.EnvStrings())
+
+	// "set default-dir" provides a fallback working directory when one was not
+	// supplied explicitly via --dir.
+	if workDir == "" {
+		workDir = saxrc.ExpandHome(rc.DefaultDir())
 	}
 
 	srv := server.NewServer(name)
+	srv.Saxrc = rc
 	srv.InitWorkDir = workDir
 	if len(command) > 0 {
 		srv.InitCmd = command[0]
@@ -1071,11 +1277,13 @@ func connectClient(name string) {
 
 	model := client.New(conn)
 
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	// Mouse support is on unless ~/.saxrc explicitly sets "mouse off".
+	if mouse, set := saxrc.Load().BoolOption("mouse"); !set || mouse {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+
+	p := tea.NewProgram(model, opts...)
 	model.SetProgram(p)
 
 	if _, err := p.Run(); err != nil {

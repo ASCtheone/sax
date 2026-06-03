@@ -44,6 +44,8 @@ func startProcess(cols, rows int, name string, args []string, workDir string) (*
 
 	cmd := p.Command(name, args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Inject environment variables configured in ~/.saxrc (setenv/export).
+	cmd.Env = append(cmd.Env, extraEnv...)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}

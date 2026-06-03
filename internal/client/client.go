@@ -5,15 +5,15 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/asc/sax/internal/saxrc"
 	"github.com/asc/sax/internal/server"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// PrefixKey is the key that activates prefix mode (Ctrl+S).
-const PrefixKey = "ctrl+s"
 
 // frameMsg carries a rendered frame from the server.
 type frameMsg struct {
@@ -38,21 +38,30 @@ type clearPrefixMsg struct{}
 
 // Model is the thin bubbletea client that connects to the server.
 type Model struct {
-	conn    net.Conn
-	writer  *server.ConnWriter
-	frame   string
-	width   int
-	height  int
-	ready   bool
-	prefix  bool
-	program *tea.Program
+	conn         net.Conn
+	writer       *server.ConnWriter
+	frame        string
+	width        int
+	height       int
+	ready        bool
+	prefixActive bool
+	program      *tea.Program
+
+	// prefixKey and keymap are resolved from ~/.saxrc at construction. keymap
+	// maps a key string to a sax command string used in prefix mode.
+	prefixKey string
+	keymap    map[string]string
 }
 
-// New creates a new client model connected to the given socket.
+// New creates a new client model connected to the given socket. It loads
+// ~/.saxrc to resolve the prefix key and prefix-mode keybindings.
 func New(conn net.Conn) *Model {
+	prefixKey, keymap := buildKeymap(saxrc.Load())
 	return &Model{
-		conn:   conn,
-		writer: server.NewConnWriter(conn),
+		conn:      conn,
+		writer:    server.NewConnWriter(conn),
+		prefixKey: prefixKey,
+		keymap:    keymap,
 	}
 }
 
@@ -115,8 +124,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case clearPrefixMsg:
-		if m.prefix {
-			m.prefix = false
+		if m.prefixActive {
+			m.prefixActive = false
 			_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{
 				Cmd:  server.CmdPrefixMode,
 				Args: "false",
@@ -149,10 +158,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Prefix mode activation
-	if key == PrefixKey {
-		if !m.prefix {
-			m.prefix = true
+	// Prefix key activation
+	if key == m.prefixKey {
+		if !m.prefixActive {
+			m.prefixActive = true
 			_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{
 				Cmd:  server.CmdPrefixMode,
 				Args: "true",
@@ -161,28 +170,30 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return clearPrefixMsg{}
 			})
 		}
-		// Double Ctrl+S sends literal Ctrl+S to PTY
-		m.prefix = false
+		// Pressing the prefix twice sends it through to the PTY literally.
+		m.prefixActive = false
 		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{
 			Cmd:  server.CmdPrefixMode,
 			Args: "false",
 		})
 		_ = m.writer.WriteMsg(server.MsgKeyInput, &server.KeyInputMsg{
-			Data: []byte{0x13},
+			Data: prefixLiteralBytes(m.prefixKey),
 		})
 		return m, nil
 	}
 
 	// Prefix mode commands
-	if m.prefix {
-		m.prefix = false
+	if m.prefixActive {
+		m.prefixActive = false
 		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{
 			Cmd:  server.CmdPrefixMode,
 			Args: "false",
 		})
-		cmd, consumed := m.handlePrefixKey(msg)
-		if consumed {
-			return m, cmd
+		if cmdStr, ok := m.keymap[key]; ok {
+			cmd, consumed := m.dispatchCommand(cmdStr)
+			if consumed {
+				return m, cmd
+			}
 		}
 	}
 
@@ -197,111 +208,76 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handlePrefixKey routes prefix commands to the server.
-func (m *Model) handlePrefixKey(msg tea.KeyMsg) (tea.Cmd, bool) {
-	key := msg.String()
+// dispatchCommand translates a sax command string (from the keymap) into a
+// protocol command sent to the server. It returns an optional tea.Cmd and
+// whether the command was recognized.
+func (m *Model) dispatchCommand(cmdStr string) (tea.Cmd, bool) {
+	fields := strings.Fields(cmdStr)
+	if len(fields) == 0 {
+		return nil, false
+	}
+	name, args := fields[0], fields[1:]
 
-	switch key {
-	// Tab management
-	case "c":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdCreateTab})
-		return nil, true
-	case "n":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdNextTab})
-		return nil, true
-	case "p":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdPrevTab})
-		return nil, true
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		idx := int(key[0] - '1')
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{
-			Cmd:  server.CmdGoToTab,
-			Args: fmt.Sprintf("%d", idx),
-		})
-		return nil, true
-	case "X":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdCloseTab})
-		return nil, true
+	send := func(cmd, cmdArgs string) {
+		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: cmd, Args: cmdArgs})
+	}
 
-	// Pane management
-	case "v", "|":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdSplitV})
-		return nil, true
-	case "s", "-":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdSplitH})
-		return nil, true
-	case "h":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdNavPane, Args: "left"})
-		return nil, true
-	case "j":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdNavPane, Args: "down"})
-		return nil, true
-	case "k":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdNavPane, Args: "up"})
-		return nil, true
-	case "l":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdNavPane, Args: "right"})
-		return nil, true
-	case "x":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdClosePane})
-		return nil, true
-	case "z":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdZoom})
-		return nil, true
-
-	// Session commands
-	case "d":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdDetach})
+	switch name {
+	case "new-tab", "new-window":
+		send(server.CmdCreateTab, "")
+	case "next-tab":
+		send(server.CmdNextTab, "")
+	case "prev-tab":
+		send(server.CmdPrevTab, "")
+	case "select-tab", "go-to-tab":
+		idx := 0
+		if len(args) > 0 {
+			if n, err := strconv.Atoi(args[0]); err == nil {
+				idx = n - 1 // .saxrc / UI tabs are 1-based
+			}
+		}
+		send(server.CmdGoToTab, fmt.Sprintf("%d", idx))
+	case "close-tab":
+		send(server.CmdCloseTab, "")
+	case "split-v", "split-vertical":
+		send(server.CmdSplitV, "")
+	case "split-h", "split-horizontal":
+		send(server.CmdSplitH, "")
+	case "pane-left":
+		send(server.CmdNavPane, "left")
+	case "pane-right":
+		send(server.CmdNavPane, "right")
+	case "pane-up":
+		send(server.CmdNavPane, "up")
+	case "pane-down":
+		send(server.CmdNavPane, "down")
+	case "close-pane":
+		send(server.CmdClosePane, "")
+	case "zoom":
+		send(server.CmdZoom, "")
+	case "detach":
+		send(server.CmdDetach, "")
 		return tea.Quit, true
-
-	// Copy/scrollback
-	case "[":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdEnterCopyMode})
-		return nil, true
-	case "]":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdPaste})
-		return nil, true
-
-	// Window list
-	case `"`:
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdWindowList})
-		return nil, true
-
-	// Logging
-	case "H":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdToggleLog})
-		return nil, true
-
-	// Hardcopy (lowercase h is nav, so use ctrl+h or uppercase context)
-	// Actually in the plan it says Ctrl+S h for hardcopy — but h is nav left.
-	// The plan says: Ctrl+S h for hardcopy, Ctrl+S H for logging. Let me check...
-	// Plan says: Ctrl+S H for logging, Ctrl+S h for hardcopy
-	// But h is already nav_pane left in the current keybindings.
-	// We need to differentiate. Let's keep h as nav_pane left and use ctrl+h for hardcopy.
-
-	// Lock screen
-	case "ctrl+x":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdLock})
-		return nil, true
-
-	// Monitor activity
-	case "M":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdMonitorAct})
-		return nil, true
-
-	// Monitor silence
-	case "_":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdMonitorSil})
-		return nil, true
-
-	// Help
-	case "?":
-		_ = m.writer.WriteMsg(server.MsgCommand, &server.CommandMsg{Cmd: server.CmdHelp})
-		return nil, true
-
+	case "copy-mode":
+		send(server.CmdEnterCopyMode, "")
+	case "paste":
+		send(server.CmdPaste, "")
+	case "window-list":
+		send(server.CmdWindowList, "")
+	case "toggle-log":
+		send(server.CmdToggleLog, "")
+	case "lock":
+		send(server.CmdLock, "")
+	case "monitor-activity":
+		send(server.CmdMonitorAct, "")
+	case "monitor-silence":
+		send(server.CmdMonitorSil, "")
+	case "help":
+		send(server.CmdHelp, "")
 	default:
 		return nil, false
 	}
+	return nil, true
 }
 
 // handleMouse processes mouse events, sending wheel scrolls to the server.
@@ -356,7 +332,9 @@ func (m *Model) readServerMessages() tea.Cmd {
 						m.program.Send(sessionEventMsg{event: event})
 					}
 				case server.MsgCopyBuffer:
-					// Could integrate with system clipboard
+					// The server also prepends an OSC 52 sequence to the
+					// next frame, which the user's outer terminal acts on
+					// to set the system clipboard. Nothing to do here.
 				case server.MsgError:
 					var errMsg server.ErrorMsg
 					if err := server.DecodeData(env, &errMsg); err == nil {

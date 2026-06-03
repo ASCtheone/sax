@@ -1,0 +1,65 @@
+# Example ~/.saxrc — sax configuration (zsh-flavored)
+#
+# Copy this to ~/.saxrc (or set $SAXRC to point elsewhere). Lines beginning
+# with '#' are comments. End a line with '\' to continue it onto the next.
+# A malformed line is skipped with a warning, never a crash.
+
+# ---------------------------------------------------------------------------
+# Options  ( set <key> <value> )
+# ---------------------------------------------------------------------------
+
+# Default shell for new panes (a name on PATH or an absolute path).
+set shell zsh
+
+# Prefix key (default is C-s / Ctrl+S). Modifiers: C=ctrl, M=alt, S=shift.
+set prefix C-a
+
+# Color theme: one of neon-blue, gruvbox, catppuccin-mocha, tokyo-night.
+set theme tokyo-night
+
+# Override individual theme colors on top of the chosen preset.
+set theme.accent #ff9e64
+
+# Scrollback lines retained per pane.
+set history-limit 10000
+
+# Default working directory for new sessions when none is given with --dir.
+set default-dir ~/code
+
+# ---------------------------------------------------------------------------
+# Environment  ( setenv KEY value  |  export KEY=value )
+# Injected into every pane sax spawns.
+# ---------------------------------------------------------------------------
+
+setenv EDITOR nvim
+export PAGER=less
+
+# ---------------------------------------------------------------------------
+# Keybindings  ( bind <key> <command> | unbind <key> )
+# Commands: new-tab next-tab prev-tab select-tab N close-tab split-v split-h
+#           pane-left pane-right pane-up pane-down close-pane zoom detach
+#           copy-mode paste window-list toggle-log lock
+#           monitor-activity monitor-silence help
+# ---------------------------------------------------------------------------
+
+bind | split-v
+bind - split-h
+# unbind '"'   # remove a default binding (here: the window list)
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+
+# run: sax layout commands executed when a session is created.
+#      Supported: split-v, split-h, new-tab, select-tab N.
+run "split-v"
+
+# hook new-pane: shell commands typed into every newly spawned pane,
+#                like a snippet of ~/.zshrc that runs on each shell.
+hook new-pane "echo welcome to sax"
+
+# ---------------------------------------------------------------------------
+# Modularity
+# ---------------------------------------------------------------------------
+
+# source ~/.config/sax/extra.saxrc

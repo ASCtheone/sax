@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/asc/sax/internal/pty"
@@ -79,6 +80,9 @@ func (p *Pane) Close() {
 }
 
 // Render returns the ANSI representation of the terminal content.
+// The vt emulator uses \r\n line separators, but SAX's frame assembly
+// and bubbletea expect \n. Stray \r characters cause double-text rendering
+// artifacts and corrupt multi-pane grid compositing.
 func (p *Pane) Render() string {
-	return p.Term.Render()
+	return strings.ReplaceAll(p.Term.Render(), "\r\n", "\n")
 }

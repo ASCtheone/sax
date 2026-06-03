@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/asc/sax/internal/ipc"
+	"github.com/asc/sax/internal/saxrc"
 )
 
 // Server is the SAX daemon that owns sessions and accepts client connections.
@@ -26,6 +27,10 @@ type Server struct {
 	InitCmd     string
 	InitCmdArgs []string
 	InitWorkDir string
+
+	// Saxrc is the parsed ~/.saxrc, consulted for startup hooks and run
+	// commands when sessions are created. Never nil after doServerMode wiring.
+	Saxrc *saxrc.Config
 }
 
 // NewServer creates a new server for the named session.
@@ -45,6 +50,11 @@ func (s *Server) Run() error {
 
 	// Clean stale sessions first
 	ipc.CleanStaleSessions()
+
+	// Apply ~/.saxrc startup hooks and run commands to sessions as they spawn.
+	if s.Saxrc != nil {
+		s.sessions.ConfigureHooks(s.Saxrc.Hooks["new-pane"], s.Saxrc.RunCmds)
+	}
 
 	listener, err := ipc.Listen(s.name)
 	if err != nil {

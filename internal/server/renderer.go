@@ -79,11 +79,31 @@ func RenderFrame(ctx *RenderContext) string {
 	return result
 }
 
+// padToSize ensures content has exactly height lines, each exactly width visual columns.
+func padToSize(content string, width, height int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		} else if w < width {
+			lines[i] = line + strings.Repeat(" ", width-w)
+		}
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderPanes renders the pane area with borders.
 func renderPanes(tab *session.Tab, width, height int) string {
 	if tab.Zoomed {
 		if p, ok := tab.Panes[tab.ZoomedPane]; ok {
-			return p.Render()
+			return padToSize(p.Render(), width, height)
 		}
 	}
 
@@ -92,7 +112,7 @@ func renderPanes(tab *session.Tab, width, height int) string {
 	// Single pane — render directly
 	if len(rects) == 1 {
 		for _, p := range tab.Panes {
-			return p.Render()
+			return padToSize(p.Render(), width, height)
 		}
 	}
 

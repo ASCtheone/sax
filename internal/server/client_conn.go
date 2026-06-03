@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"github.com/asc/sax/internal/scrollback"
 	"github.com/asc/sax/internal/session"
 	"github.com/asc/sax/internal/statusbar"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ClientConn represents a connected client.
@@ -48,6 +50,11 @@ type ClientConn struct {
 	// Mouse wheel scrollback
 	scrollOffset int  // 0 = live (bottom), >0 = scrolled up N lines
 	scrollMode   bool // true when showing scrollback overlay
+
+	// pendingClipboardOSC holds an OSC 52 sequence to prepend to the next
+	// frame so the user's outer terminal copies the yanked text to the
+	// system clipboard. Cleared after it is sent.
+	pendingClipboardOSC string
 }
 
 var clientCounter atomic.Uint64
@@ -156,6 +163,7 @@ func (cc *ClientConn) sendFrame() {
 	// Scrollback overlay mode — show scrollback lines instead of live terminal
 	if cc.scrollMode && cc.scrollOffset > 0 {
 		frame := cc.renderScrollback(w, h)
+		frame = cc.drainClipboardOSC() + frame
 		cc.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
 		_ = cc.writer.WriteMsg(MsgFrame, &FrameMsg{
 			Content: frame,
@@ -196,6 +204,7 @@ func (cc *ClientConn) sendFrame() {
 	}
 
 	frame := RenderFrame(ctx)
+	frame = cc.drainClipboardOSC() + frame
 
 	// Set write deadline to prevent slow client from blocking
 	cc.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
@@ -205,6 +214,24 @@ func (cc *ClientConn) sendFrame() {
 		H:       h,
 	})
 	cc.conn.SetWriteDeadline(time.Time{})
+}
+
+// drainClipboardOSC returns the pending OSC 52 sequence (if any) and
+// clears it. The sequence is invisible to the rendered frame but the
+// outer terminal copies the text to the system clipboard as it is written.
+func (cc *ClientConn) drainClipboardOSC() string {
+	s := cc.pendingClipboardOSC
+	cc.pendingClipboardOSC = ""
+	return s
+}
+
+// buildOSC52 wraps text in an OSC 52 clipboard-set escape sequence.
+// Modern terminals (iTerm2, Windows Terminal, Alacritty, Kitty, Ghostty,
+// tmux with set-clipboard) interpret this as "copy payload to system
+// clipboard". Invisible in the rendered output.
+func buildOSC52(text string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+	return "\x1b]52;c;" + encoded + "\x07"
 }
 
 // dispatch routes a message to the appropriate handler.
@@ -362,6 +389,7 @@ func (cc *ClientConn) handleCopyModeInput(data []byte) {
 		if yanked != "" {
 			cc.ms.SetCopyBuffer(yanked)
 			_ = cc.writer.WriteMsg(MsgCopyBuffer, &CopyBufferMsg{Content: yanked})
+			cc.pendingClipboardOSC = buildOSC52(yanked)
 		}
 		if exit {
 			cc.copyMode = false
@@ -427,6 +455,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		}
 		for _, pane := range tab.Panes {
 			cc.ms.startPaneReader(pane)
+			cc.ms.applyNewPaneHooks(pane)
 		}
 		cc.ms.MarkDirty()
 
@@ -473,6 +502,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		}
 		tab.ResizePanes(session.Rect{X: 0, Y: 0, W: cols, H: rows})
 		cc.ms.startPaneReader(pane)
+		cc.ms.applyNewPaneHooks(pane)
 		cc.ms.MarkDirty()
 
 	case CmdSplitH:
@@ -487,6 +517,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		}
 		tab.ResizePanes(session.Rect{X: 0, Y: 0, W: cols, H: rows})
 		cc.ms.startPaneReader(pane)
+		cc.ms.applyNewPaneHooks(pane)
 		cc.ms.MarkDirty()
 
 	case CmdClosePane:
@@ -703,7 +734,9 @@ func (cc *ClientConn) handleLockInput(data []byte) {
 	}
 }
 
-// renderScrollback renders a scrollback view with a status indicator.
+// renderScrollback renders the scrollback view for mouse-wheel scroll
+// mode. Lines are ANSI-aware: scrollback stores SGR styling now, so we
+// use visible-column truncation/padding instead of byte length.
 func (cc *ClientConn) renderScrollback(w, h int) string {
 	pane := cc.ms.Session.ActivePane()
 	if pane == nil {
@@ -716,10 +749,10 @@ func (cc *ClientConn) renderScrollback(w, h int) string {
 		return ""
 	}
 
-	// Reserve 1 line for the scrollback indicator bar
+	// Reserve 1 line for the scrollback indicator bar.
 	viewH := h - 1
 
-	// Calculate the window of lines to show
+	// Calculate the window of lines to show.
 	endIdx := total - cc.scrollOffset
 	if endIdx < 0 {
 		endIdx = 0
@@ -729,43 +762,42 @@ func (cc *ClientConn) renderScrollback(w, h int) string {
 		startIdx = 0
 	}
 
-	var rows []string
+	rows := make([]string, 0, viewH+1)
 	for i := startIdx; i < endIdx && i < total; i++ {
-		line := allLines[i]
-		// Truncate to width
-		if len(line) > w {
-			line = line[:w]
-		}
-		// Pad to width
-		if len(line) < w {
-			line = line + strings.Repeat(" ", w-len(line))
-		}
-		rows = append(rows, line)
+		rows = append(rows, padLineToVisibleWidth(allLines[i], w))
 	}
 
-	// Pad remaining view lines
+	// Pad remaining view lines.
 	for len(rows) < viewH {
 		rows = append(rows, strings.Repeat(" ", w))
 	}
 
-	// Scrollback indicator bar
+	// Scrollback indicator bar.
 	pct := 0
 	if total > 0 {
 		pct = (total - cc.scrollOffset) * 100 / total
 	}
 	indicator := fmt.Sprintf(" [SCROLLBACK: line %d/%d (%d%%)] ↑↓ scroll | any key to exit ", total-cc.scrollOffset, total, pct)
-	if len(indicator) > w {
-		indicator = indicator[:w]
-	}
-	if len(indicator) < w {
-		indicator = indicator + strings.Repeat(" ", w-len(indicator))
-	}
-	// Yellow background for indicator
+	indicator = padLineToVisibleWidth(indicator, w)
+	// Yellow background for indicator.
 	indicator = "\x1b[30;43m" + indicator + "\x1b[0m"
 
 	rows = append(rows, indicator)
 
 	return strings.Join(rows, "\n")
+}
+
+// padLineToVisibleWidth truncates or space-pads a (possibly SGR-styled)
+// line to exactly `width` visible columns.
+func padLineToVisibleWidth(line string, width int) string {
+	vw := ansi.StringWidth(line)
+	if vw > width {
+		return ansi.Truncate(line, width, "")
+	}
+	if vw < width {
+		return line + strings.Repeat(" ", width-vw)
+	}
+	return line
 }
 
 func maskString(s string) string {

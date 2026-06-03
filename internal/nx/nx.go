@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -83,9 +84,36 @@ func (ws *Workspace) ServeTargets() []Project {
 	return result
 }
 
+// Resolve returns the binary and base arguments used to invoke nx. A globally
+// installed "nx" on PATH is preferred (the "native" experience after
+// `sax setup`); otherwise it falls back to "npx nx".
+func Resolve() (string, []string) {
+	if p, err := exec.LookPath("nx"); err == nil {
+		return p, nil
+	}
+	return "npx", []string{"nx"}
+}
+
+// HasGlobal reports whether a global nx binary is available on PATH.
+func HasGlobal() bool {
+	_, err := exec.LookPath("nx")
+	return err == nil
+}
+
+// Command builds a full nx invocation (binary + args) for the given nx
+// arguments, using the resolved nx (global or npx).
+func Command(args ...string) []string {
+	bin, base := Resolve()
+	out := make([]string, 0, 1+len(base)+len(args))
+	out = append(out, bin)
+	out = append(out, base...)
+	out = append(out, args...)
+	return out
+}
+
 // NxCommand returns the nx run command for a project target.
 func NxCommand(projectName, targetName string) []string {
-	return []string{"npx", "nx", "run", projectName + ":" + targetName}
+	return Command("run", projectName+":"+targetName)
 }
 
 func findNxRoot(dir string) string {

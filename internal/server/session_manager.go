@@ -29,12 +29,21 @@ type ManagedSession struct {
 	alertCh chan monitor.Alert
 
 	onPaneExit func(paneID string)
+
+	// newPaneHooks are shell commands (from ~/.saxrc "hook new-pane") typed
+	// into every newly spawned pane.
+	newPaneHooks []string
 }
 
 // SessionManager manages named sessions.
 type SessionManager struct {
 	sessions map[string]*ManagedSession
 	mu       sync.RWMutex
+
+	// newPaneHooks and runCmds are sourced from ~/.saxrc and applied to
+	// sessions as they are created. Set once at startup.
+	newPaneHooks []string
+	runCmds      []string
 }
 
 // NewSessionManager creates a new session manager.
@@ -42,6 +51,13 @@ func NewSessionManager() *SessionManager {
 	return &SessionManager{
 		sessions: make(map[string]*ManagedSession),
 	}
+}
+
+// ConfigureHooks sets the ~/.saxrc-derived new-pane hooks and run commands
+// applied to every session created afterward. Call once at startup.
+func (sm *SessionManager) ConfigureHooks(newPaneHooks, runCmds []string) {
+	sm.newPaneHooks = append([]string(nil), newPaneHooks...)
+	sm.runCmds = append([]string(nil), runCmds...)
 }
 
 // Create creates a new named session. If cmdName is non-empty, the initial
@@ -68,12 +84,13 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 
 	alertCh := make(chan monitor.Alert, 16)
 	ms := &ManagedSession{
-		Name:    name,
-		Session: sess,
-		clients: make(map[string]*ClientConn),
-		Logger:  logger.New(),
-		Monitor: monitor.New(alertCh),
-		alertCh: alertCh,
+		Name:         name,
+		Session:      sess,
+		clients:      make(map[string]*ClientConn),
+		Logger:       logger.New(),
+		Monitor:      monitor.New(alertCh),
+		alertCh:      alertCh,
+		newPaneHooks: sm.newPaneHooks,
 	}
 	ms.Monitor.Start()
 
@@ -97,10 +114,14 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 
 	sm.sessions[name] = ms
 
-	// Start PTY readers for initial panes
+	// Start PTY readers for initial panes and apply new-pane hooks.
 	for _, pane := range sess.AllPanes() {
 		ms.startPaneReader(pane)
+		ms.applyNewPaneHooks(pane)
 	}
+
+	// Apply "run" startup layout commands from ~/.saxrc.
+	ms.applyRunCmds(sm.runCmds)
 
 	return ms, nil
 }

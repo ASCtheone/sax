@@ -23,7 +23,7 @@ func New(cols, rows int) *Terminal {
 		emu:        emu,
 		cols:       cols,
 		rows:       rows,
-		Scrollback: scrollback.NewBuffer(scrollback.DefaultCapacity),
+		Scrollback: scrollback.NewBuffer(scrollback.ConfiguredCapacity()),
 	}
 }
 
