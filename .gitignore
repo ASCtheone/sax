@@ -8,6 +8,6 @@ sax.exe
 *.old
 *-test.exe*
 
-# compiled ss binaries
-ss-linux
-ss
+# compiled ss binaries (anchored to repo root so cmd/ss/ is not ignored)
+/ss-linux
+/ss
