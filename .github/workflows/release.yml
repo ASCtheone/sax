@@ -51,22 +51,27 @@ jobs:
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Build
+        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
-        run: >
-          go build
-          -ldflags="-s -w
-          -X main.version=${{ steps.vars.outputs.version }}
-          -X main.commit=${{ steps.vars.outputs.commit }}
-          -X main.date=${{ steps.vars.outputs.date }}"
-          -o sax-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} .
+        run: |
+          mkdir -p dist
+          go build \
+            -ldflags="-s -w \
+            -X main.version=${{ steps.vars.outputs.version }} \
+            -X main.commit=${{ steps.vars.outputs.commit }} \
+            -X main.date=${{ steps.vars.outputs.date }}" \
+            -o dist/sax-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} .
+          go build \
+            -ldflags="-s -w" \
+            -o dist/ss-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/ss
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sax-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: sax-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
 
   release:
     needs: build
@@ -82,8 +87,8 @@ jobs:
       - name: Collect binaries
         run: |
           mkdir -p release
-          find artifacts -type f -name 'sax-*' -exec cp {} release/ \;
-          chmod +x release/sax-linux-* release/sax-darwin-* || true
+          find artifacts -type f \( -name 'sax-*' -o -name 'ss-*' \) -exec cp {} release/ \;
+          chmod +x release/sax-linux-* release/sax-darwin-* release/ss-linux-* release/ss-darwin-* || true
           ls -la release/
 
       - name: Create Release
