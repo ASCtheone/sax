@@ -12,6 +12,7 @@ import (
 // Process wraps a pseudo-terminal with a running shell process.
 type Process struct {
 	pty gopty.Pty
+	cmd *gopty.Cmd
 	mu  sync.Mutex
 }
 
@@ -55,7 +56,27 @@ func startProcess(cols, rows int, name string, args []string, workDir string) (*
 		return nil, err
 	}
 
-	return &Process{pty: p}, nil
+	return &Process{pty: p, cmd: cmd}, nil
+}
+
+// Wait blocks until the underlying process exits, returning its exit error
+// (nil on a clean exit). Detecting exit this way is reliable across platforms,
+// unlike waiting for the PTY to reach EOF — on Windows ConPTY the master does
+// not always close when the child exits.
+func (p *Process) Wait() error {
+	if p.cmd == nil {
+		return nil
+	}
+	return p.cmd.Wait()
+}
+
+// ExitCode returns the process exit code, or -1 if it is not yet available.
+// Call after Wait.
+func (p *Process) ExitCode() int {
+	if p.cmd == nil || p.cmd.ProcessState == nil {
+		return -1
+	}
+	return p.cmd.ProcessState.ExitCode()
 }
 
 // Read reads output from the PTY.

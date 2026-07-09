@@ -7,3 +7,7 @@ sax.exe
 *.tmp
 *.old
 *-test.exe*
+
+# compiled ss binaries
+ss-linux
+ss
