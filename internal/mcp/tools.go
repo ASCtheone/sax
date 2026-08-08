@@ -819,6 +819,10 @@ func registerCucUp(s *Server) {
 				}
 			}
 
+			// Container was (re)created — clear any stale Claude session so it
+			// won't be reattached to a dead container.
+			killSessionByName(cuc.SessionName)
+
 			// Make the persistent volume writable, persist config location, seed.
 			_, _ = runCapture(cuc.ChownHome(cuc.DefaultContainer), "")
 			_, _ = runCapture(cuc.EnsureConfigSymlink(cuc.DefaultContainer), "")
@@ -876,19 +880,7 @@ func registerCucDown(s *Server) {
 			}
 
 			// Kill the Claude session if alive.
-			if ipc.IsSessionAlive(cuc.SessionName) {
-				if pidData, err := os.ReadFile(ipc.PidPath(cuc.SessionName)); err == nil {
-					pid := 0
-					fmt.Sscanf(strings.TrimSpace(string(pidData)), "%d", &pid)
-					if pid > 0 {
-						if proc, err := os.FindProcess(pid); err == nil {
-							_ = proc.Signal(os.Interrupt)
-						}
-					}
-				}
-				ipc.CleanupSocket(cuc.SessionName)
-				os.Remove(ipc.PidPath(cuc.SessionName))
-			}
+			killSessionByName(cuc.SessionName)
 
 			if root := cuc.ComposeRoot(""); root != "" {
 				if out, err := runCapture(cuc.ComposeDown(), root); err != nil {
@@ -927,6 +919,23 @@ func registerCucStatus(s *Server) {
 			return textResult(string(b))
 		},
 	)
+}
+
+// killSessionByName terminates a SAX session if it is alive, ignoring errors.
+func killSessionByName(name string) {
+	if ipc.IsSessionAlive(name) {
+		if pidData, err := os.ReadFile(ipc.PidPath(name)); err == nil {
+			pid := 0
+			fmt.Sscanf(strings.TrimSpace(string(pidData)), "%d", &pid)
+			if pid > 0 {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(os.Interrupt)
+				}
+			}
+		}
+	}
+	ipc.CleanupSocket(name)
+	os.Remove(ipc.PidPath(name))
 }
 
 // tailLines returns the last n non-empty-trimmed lines of s.

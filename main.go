@@ -739,6 +739,11 @@ func doCucUp() {
 
 	container := cuc.DefaultContainer
 
+	// The container was just (re)created; any prior Claude session now points at a
+	// dead container and would hang on reattach. Clear it so `sax cuc claude`
+	// starts a fresh session.
+	killSessionQuiet(cuc.SessionName)
+
 	// Make the persistent volume writable by dev, persist the config location,
 	// and report the toolchain (all best-effort; failures are non-fatal).
 	_ = runForeground(cuc.ChownHome(container), "")
@@ -799,6 +804,25 @@ func doCucDown() {
 		_ = runForeground(cuc.RemoveContainer(cuc.DefaultContainer), "")
 	}
 	fmt.Println("sax cuc: stopped.")
+}
+
+// killSessionQuiet terminates a session if it exists, without erroring or
+// exiting. Used to clear a stale cuc-claude session after the container is
+// recreated (a session outliving its container hangs on reattach).
+func killSessionQuiet(name string) {
+	if ipc.IsSessionAlive(name) {
+		if pidData, err := os.ReadFile(ipc.PidPath(name)); err == nil {
+			pid := 0
+			fmt.Sscanf(strings.TrimSpace(string(pidData)), "%d", &pid)
+			if pid > 0 {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(os.Interrupt)
+				}
+			}
+		}
+	}
+	ipc.CleanupSocket(name)
+	os.Remove(ipc.PidPath(name))
 }
 
 // doCucStatus prints container + session state as JSON.
