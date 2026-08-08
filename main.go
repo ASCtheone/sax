@@ -737,9 +737,23 @@ func doCucUp() {
 		}
 	}
 
-	// Seed credentials + report toolchain (best-effort; failure is non-fatal).
-	_ = runForeground(cuc.Seed(cuc.DefaultContainer), "")
-	fmt.Printf("sax cuc: container %q ready. Launch Claude with: sax cuc claude\n", cuc.DefaultContainer)
+	container := cuc.DefaultContainer
+
+	// Make the persistent volume writable by dev, persist the config location,
+	// and report the toolchain (all best-effort; failures are non-fatal).
+	_ = runForeground(cuc.ChownHome(container), "")
+	_ = runForeground(cuc.EnsureConfigSymlink(container), "")
+	_ = runForeground(cuc.Seed(container), "")
+
+	// Transpose the host Claude login into the container so `sax cuc claude`
+	// works without a separate login step (macOS Keychain -> container).
+	if err := cuc.SetupAuth(container); err != nil {
+		fmt.Fprintf(os.Stderr, "sax cuc: login sync skipped (%v) — you may need to auth inside the container\n", err)
+	} else {
+		fmt.Println("sax cuc: host login synced into container")
+	}
+
+	fmt.Printf("sax cuc: container %q ready. Launch Claude with: sax cuc claude\n", container)
 }
 
 // doCucClaude launches (or reattaches) a Claude instance running inside the

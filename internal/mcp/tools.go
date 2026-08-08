@@ -819,10 +819,18 @@ func registerCucUp(s *Server) {
 				}
 			}
 
-			// Seed credentials (best-effort).
+			// Make the persistent volume writable, persist config location, seed.
+			_, _ = runCapture(cuc.ChownHome(cuc.DefaultContainer), "")
+			_, _ = runCapture(cuc.EnsureConfigSymlink(cuc.DefaultContainer), "")
 			seedOut, _ := runCapture(cuc.Seed(cuc.DefaultContainer), "")
 
-			return textResult(fmt.Sprintf("Container %q ready. Launch Claude with sax_cuc_claude.\n%s", cuc.DefaultContainer, tailLines(seedOut, 8)))
+			// Transpose the host login into the container (best-effort).
+			auth := "host login synced"
+			if err := cuc.SetupAuth(cuc.DefaultContainer); err != nil {
+				auth = "login sync skipped: " + err.Error()
+			}
+
+			return textResult(fmt.Sprintf("Container %q ready (%s). Launch Claude with sax_cuc_claude.\n%s", cuc.DefaultContainer, auth, tailLines(seedOut, 8)))
 		},
 	)
 }

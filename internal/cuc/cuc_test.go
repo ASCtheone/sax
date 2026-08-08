@@ -1,6 +1,7 @@
 package cuc
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +19,7 @@ func TestClaudeCommand(t *testing.T) {
 }
 
 func TestComposeCommands(t *testing.T) {
-	if got := ComposeUp(); !reflect.DeepEqual(got, []string{"docker", "compose", "up", "-d", "--build"}) {
+	if got := ComposeUp(); !reflect.DeepEqual(got, []string{"docker", "compose", "up", "-d"}) {
 		t.Errorf("ComposeUp() = %v", got)
 	}
 	if got := ComposeDown(); !reflect.DeepEqual(got, []string{"docker", "compose", "down"}) {
@@ -98,6 +99,37 @@ func TestComposeRoot_NoneFound(t *testing.T) {
 	dir := t.TempDir()
 	if got := ComposeRoot(dir); got == dir {
 		t.Fatalf("ComposeRoot(%q) unexpectedly matched itself with no compose file", dir)
+	}
+}
+
+func TestChownHome(t *testing.T) {
+	got := ChownHome("cuc-dev")
+	want := []string{"docker", "exec", "-u", "root", "cuc-dev",
+		"chown", "-R", "dev:dev", "/home/dev/.claude"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ChownHome() = %v, want %v", got, want)
+	}
+}
+
+func TestEnsureConfigSymlink(t *testing.T) {
+	got := EnsureConfigSymlink("cuc-dev")
+	if got[0] != "docker" || got[3] != "dev" {
+		t.Fatalf("EnsureConfigSymlink() should be a dev docker exec: %v", got)
+	}
+	joined := strings.Join(got, " ")
+	for _, want := range []string{"ln -sfn", "$HOME/.claude/config.json", "$HOME/.claude.json"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("EnsureConfigSymlink() missing %q", want)
+		}
+	}
+}
+
+func TestHostAccountJSON_AlwaysValidJSON(t *testing.T) {
+	// Whatever the host state, it must return parseable JSON (never a raw error),
+	// since the value is injected into a `docker exec -e` and json.loads'd inside.
+	var v map[string]interface{}
+	if err := json.Unmarshal([]byte(hostAccountJSON()), &v); err != nil {
+		t.Fatalf("hostAccountJSON() returned invalid JSON: %v", err)
 	}
 }
 

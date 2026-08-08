@@ -5,6 +5,9 @@
 package cuc
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,8 +60,10 @@ func ComposeRoot(dir string) string {
 	}
 }
 
-// ComposeUp builds the compose invocation that builds + starts the stack.
-func ComposeUp() []string { return []string{"docker", "compose", "up", "-d", "--build"} }
+// ComposeUp builds the compose invocation that starts the stack. It reuses the
+// existing image (compose still builds automatically on first run when absent);
+// a rebuild is an explicit `docker compose build` / `cuc-up.sh --build`.
+func ComposeUp() []string { return []string{"docker", "compose", "up", "-d"} }
 
 // ComposeDown builds the compose teardown invocation.
 func ComposeDown() []string { return []string{"docker", "compose", "down"} }
@@ -119,4 +124,89 @@ func Running(container string) bool {
 // Exists reports whether a container with the given name exists in any state.
 func Exists(container string) bool {
 	return exec.Command("docker", "inspect", container).Run() == nil
+}
+
+// KeychainService is the macOS Keychain service under which Claude Code stores
+// its OAuth token (there is no ~/.claude/.credentials.json on macOS).
+const KeychainService = "Claude Code-credentials"
+
+// ChownHome makes the (root-owned) named volume at ~/.claude writable by dev.
+func ChownHome(container string) []string {
+	home := "/home/" + ContainerUser + "/.claude"
+	return []string{"docker", "exec", "-u", "root", container,
+		"chown", "-R", ContainerUser + ":" + ContainerUser, home}
+}
+
+// EnsureConfigSymlink points ~/.claude.json at a file INSIDE the volume so the
+// login/onboarding state persists across container recreation (otherwise
+// ~/.claude.json is a sibling of the volume and is lost on every recreate).
+func EnsureConfigSymlink(container string) []string {
+	script := `mkdir -p "$HOME/.claude"; ` +
+		`if [ ! -L "$HOME/.claude.json" ]; then ` +
+		`[ -f "$HOME/.claude.json" ] && mv "$HOME/.claude.json" "$HOME/.claude/config.json"; ` +
+		`ln -sfn "$HOME/.claude/config.json" "$HOME/.claude.json"; fi`
+	return []string{"docker", "exec", "-u", ContainerUser, container, "bash", "-lc", script}
+}
+
+// SetupAuth transposes the host Claude login into the container: macOS Keychain
+// credentials plus the account + onboarding fields the interactive TUI requires
+// (print mode needs only credentials, the TUI needs these too). Best-effort —
+// returns nil when there is nothing to sync (e.g. non-macOS, no Keychain entry).
+func SetupAuth(container string) error {
+	// 1. credentials: macOS Keychain -> container ~/.claude/.credentials.json.
+	//    Piped via stdin so the token never lands in an argv/env.
+	if _, err := exec.LookPath("security"); err == nil {
+		out, err := exec.Command("security", "find-generic-password", "-s", KeychainService, "-w").Output()
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			write := exec.Command("docker", "exec", "-i", "-u", ContainerUser, container,
+				"bash", "-c", `umask 077; mkdir -p "$HOME/.claude" && cat > "$HOME/.claude/.credentials.json"`)
+			write.Stdin = bytes.NewReader(out)
+			if err := write.Run(); err != nil {
+				return fmt.Errorf("write credentials: %w", err)
+			}
+		}
+	}
+
+	// 2. account + onboarding flag -> container ~/.claude.json. oauthAccount/userID
+	//    carry no secret, so they pass via env; the script is piped on stdin.
+	acct := hostAccountJSON()
+	py := "import json,os\n" +
+		"acct=json.loads(os.environ.get('CUC_ACCT','{}'))\n" +
+		"p=os.path.expanduser('~/.claude.json')\n" +
+		"d=json.load(open(p)) if os.path.exists(p) else {}\n" +
+		"d.update(acct)\n" +
+		"d['hasCompletedOnboarding']=True\n" +
+		"json.dump(d,open(p,'w'),indent=2)\n"
+	cmd := exec.Command("docker", "exec", "-i", "-u", ContainerUser, "-e", "CUC_ACCT="+acct, container, "python3", "-")
+	cmd.Stdin = strings.NewReader(py)
+	return cmd.Run()
+}
+
+// hostAccountJSON returns {"oauthAccount":..,"userID":..} extracted from the
+// host's ~/.claude.json, or "{}" when unavailable. Values stay as raw JSON so
+// nested account objects are preserved verbatim.
+func hostAccountJSON() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "{}"
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err != nil {
+		return "{}"
+	}
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(data, &full); err != nil {
+		return "{}"
+	}
+	out := map[string]json.RawMessage{}
+	for _, k := range []string{"oauthAccount", "userID"} {
+		if v, ok := full[k]; ok {
+			out[k] = v
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
