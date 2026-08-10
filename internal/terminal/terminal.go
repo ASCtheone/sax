@@ -35,6 +35,16 @@ func (t *Terminal) Write(p []byte) (int, error) {
 	return t.emu.Write(p)
 }
 
+// Read returns terminal responses the emulator generates in reply to
+// application queries (Device Attributes `ESC[c`, cursor-position reports,
+// XTVERSION, in-band resize, etc.). These MUST be forwarded back to the PTY:
+// the emulator writes them to an internal unbuffered pipe, so if nothing drains
+// this Read the first query a TUI sends (e.g. Claude at startup) blocks Write
+// forever and stalls all output — the pane renders blank.
+func (t *Terminal) Read(p []byte) (int, error) {
+	return t.emu.Read(p)
+}
+
 // Render returns the ANSI-encoded string representation of the terminal screen.
 func (t *Terminal) Render() string {
 	t.mu.RLock()
