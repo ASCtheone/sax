@@ -12,7 +12,7 @@ import (
 func TestClaudeCommand(t *testing.T) {
 	got := Claude("cuc-dev")
 	want := []string{"docker", "exec", "-it", "-u", "dev", "cuc-dev",
-		"bash", "-lc", "cd /workspace && claude"}
+		"bash", "-lc", "cd /workspace && exec claude"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Claude() = %v, want %v", got, want)
 	}

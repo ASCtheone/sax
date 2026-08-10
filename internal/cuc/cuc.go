@@ -106,10 +106,10 @@ func Seed(container string) []string {
 
 // Claude is the command a SAX session runs to host a Claude instance inside the
 // container. A login shell (-l) ensures Go/Rust are on PATH; -it gives Claude a
-// TTY (SAX supplies the PTY around it).
+// TTY (SAX supplies the PTY around it via gopty).
 func Claude(container string) []string {
 	return []string{"docker", "exec", "-it", "-u", ContainerUser, container,
-		"bash", "-lc", "cd " + WorkspaceDir + " && claude"}
+		"bash", "-lc", "cd " + WorkspaceDir + " && exec claude"}
 }
 
 // Running reports whether the named container exists and is currently running.
