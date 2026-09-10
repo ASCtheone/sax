@@ -15,6 +15,7 @@ import (
 	"github.com/asc/sax/internal/client"
 	"github.com/asc/sax/internal/completion"
 	"github.com/asc/sax/internal/config"
+	"github.com/asc/sax/internal/cuc"
 	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/mcp"
 	"github.com/asc/sax/internal/nx"
@@ -133,6 +134,29 @@ func main() {
 				// `sax nx generate ...` behave like native nx.
 				doNxPassthrough(nxArgs)
 			}
+		}
+		return
+	}
+
+	// cuc dev-container subcommand: sax cuc <command>
+	if len(args) > 0 && args[0] == "cuc" {
+		cucArgs := args[1:]
+		sub := ""
+		if len(cucArgs) > 0 {
+			sub = cucArgs[0]
+		}
+		switch sub {
+		case "", "status":
+			doCucStatus()
+		case "up":
+			doCucUp()
+		case "claude", "attach":
+			doCucClaude()
+		case "down", "stop":
+			doCucDown()
+		default:
+			fmt.Fprintf(os.Stderr, "sax cuc: unknown command %q (use up | claude | down | status)\n", sub)
+			os.Exit(1)
 		}
 		return
 	}
@@ -662,6 +686,160 @@ func doExecSession(name string, command []string, attach bool, workDir string) {
 	} else {
 		fmt.Printf("Session %q created running %q (detached).\n", name, strings.Join(command, " "))
 	}
+}
+
+// --- cuc dev container ---
+
+// runForeground runs a command with inherited stdio (so build/compose output
+// streams to the user) in the given directory ("" = current dir).
+func runForeground(command []string, dir string) error {
+	if len(command) == 0 {
+		return fmt.Errorf("empty command")
+	}
+	c := exec.Command(command[0], command[1:]...)
+	c.Dir = dir
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return c.Run()
+}
+
+// doCucUp builds + starts the cuc dev container (via compose when a compose file
+// is found, otherwise by pulling and running the published image), then seeds
+// credentials best-effort.
+func doCucUp() {
+	if !cuc.DockerAvailable() {
+		fmt.Fprintln(os.Stderr, "sax cuc: docker not found on PATH")
+		os.Exit(1)
+	}
+
+	if root := cuc.ComposeRoot(""); root != "" {
+		fmt.Printf("sax cuc: building + starting via docker compose (%s)\n", root)
+		if err := runForeground(cuc.ComposeUp(), root); err != nil {
+			fmt.Fprintf(os.Stderr, "sax cuc: compose up failed: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		image := cuc.DefaultImage
+		fmt.Printf("sax cuc: no compose file found; pulling %s\n", image)
+		if err := runForeground(cuc.PullImage(image), ""); err != nil {
+			fmt.Fprintf(os.Stderr, "sax cuc: pull failed: %v\n", err)
+			os.Exit(1)
+		}
+		if cuc.Exists(cuc.DefaultContainer) {
+			_ = runForeground(cuc.RemoveContainer(cuc.DefaultContainer), "")
+		}
+		wd, _ := os.Getwd()
+		home, _ := os.UserHomeDir()
+		if err := runForeground(cuc.RunImage(cuc.DefaultContainer, image, wd, home), ""); err != nil {
+			fmt.Fprintf(os.Stderr, "sax cuc: docker run failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	container := cuc.DefaultContainer
+
+	// The container was just (re)created; any prior Claude session now points at a
+	// dead container and would hang on reattach. Clear it so `sax cuc claude`
+	// starts a fresh session.
+	killSessionQuiet(cuc.SessionName)
+
+	// Make the persistent volume writable by dev, persist the config location,
+	// and report the toolchain (all best-effort; failures are non-fatal).
+	_ = runForeground(cuc.ChownHome(container), "")
+	_ = runForeground(cuc.EnsureConfigSymlink(container), "")
+	_ = runForeground(cuc.Seed(container), "")
+
+	// Transpose the host Claude login into the container so `sax cuc claude`
+	// works without a separate login step (macOS Keychain -> container).
+	if err := cuc.SetupAuth(container); err != nil {
+		fmt.Fprintf(os.Stderr, "sax cuc: login sync skipped (%v) — you may need to auth inside the container\n", err)
+	} else {
+		fmt.Println("sax cuc: host login synced into container")
+	}
+
+	fmt.Printf("sax cuc: container %q ready. Launch Claude with: sax cuc claude\n", container)
+}
+
+// doCucClaude launches (or reattaches) a Claude instance running inside the
+// container as a SAX session, so it gets detach/reattach + the scripting/MCP API.
+func doCucClaude() {
+	if !cuc.Running(cuc.DefaultContainer) {
+		fmt.Fprintf(os.Stderr, "sax cuc: container %q is not running. Start it with: sax cuc up\n", cuc.DefaultContainer)
+		os.Exit(1)
+	}
+
+	name := cuc.SessionName
+	if ipc.IsSessionAlive(name) {
+		fmt.Printf("sax cuc: attaching to existing session %q\n", name)
+		connectClient(name)
+		return
+	}
+
+	if err := launchDaemon(name, cuc.Claude(cuc.DefaultContainer), ""); err != nil {
+		fmt.Fprintf(os.Stderr, "sax cuc: failed to start session: %v\n", err)
+		os.Exit(1)
+	}
+	if !waitForSession(name) {
+		fmt.Fprintf(os.Stderr, "sax cuc: timed out starting session %q\n", name)
+		os.Exit(1)
+	}
+	connectClient(name)
+}
+
+// doCucDown stops the Claude session (if any) and tears the container down.
+func doCucDown() {
+	if !cuc.DockerAvailable() {
+		fmt.Fprintln(os.Stderr, "sax cuc: docker not found on PATH")
+		os.Exit(1)
+	}
+
+	if ipc.IsSessionAlive(cuc.SessionName) {
+		doKillSession(cuc.SessionName)
+	}
+
+	if root := cuc.ComposeRoot(""); root != "" {
+		_ = runForeground(cuc.ComposeDown(), root)
+	} else if cuc.Exists(cuc.DefaultContainer) {
+		_ = runForeground(cuc.RemoveContainer(cuc.DefaultContainer), "")
+	}
+	fmt.Println("sax cuc: stopped.")
+}
+
+// killSessionQuiet terminates a session if it exists, without erroring or
+// exiting. Used to clear a stale cuc-claude session after the container is
+// recreated (a session outliving its container hangs on reattach).
+func killSessionQuiet(name string) {
+	if ipc.IsSessionAlive(name) {
+		if pidData, err := os.ReadFile(ipc.PidPath(name)); err == nil {
+			pid := 0
+			fmt.Sscanf(strings.TrimSpace(string(pidData)), "%d", &pid)
+			if pid > 0 {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(os.Interrupt)
+				}
+			}
+		}
+	}
+	ipc.CleanupSocket(name)
+	os.Remove(ipc.PidPath(name))
+}
+
+// doCucStatus prints container + session state as JSON.
+func doCucStatus() {
+	status := map[string]interface{}{
+		"container":         cuc.DefaultContainer,
+		"image":             cuc.DefaultImage,
+		"docker":            cuc.DockerAvailable(),
+		"container_running": cuc.Running(cuc.DefaultContainer),
+		"session":           cuc.SessionName,
+		"session_alive":     ipc.IsSessionAlive(cuc.SessionName),
+	}
+	if root := cuc.ComposeRoot(""); root != "" {
+		status["compose_root"] = root
+	}
+	b, _ := json.MarshalIndent(status, "", "  ")
+	fmt.Println(string(b))
 }
 
 // --- NX workspace ---

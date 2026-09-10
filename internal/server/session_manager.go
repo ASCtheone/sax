@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/asc/sax/internal/logger"
@@ -293,6 +294,14 @@ func (ms *ManagedSession) broadcastEvent(event, data string) {
 
 // startPaneReader starts a goroutine to read PTY output for a pane.
 func (ms *ManagedSession) startPaneReader(pane *session.Pane) {
+	// Forward emulator query-responses (Device Attributes, cursor reports, etc.)
+	// back to the PTY. The vt emulator writes these to an internal unbuffered
+	// pipe; without this drain the first query a TUI sends blocks Term.Write
+	// forever, stalling all output and leaving the pane blank (e.g. Claude Code).
+	go func() {
+		_, _ = io.Copy(pane.Pty, pane.Term)
+	}()
+
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {

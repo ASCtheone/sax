@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/asc/sax/internal/cuc"
 	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/nx"
 )
@@ -27,6 +28,10 @@ func RegisterAllTools(s *Server, launchDaemon func(name string, command []string
 	registerNxList(s)
 	registerNxServe(s, launchDaemon, waitForSession)
 	registerNxStop(s)
+	registerCucUp(s)
+	registerCucClaude(s, launchDaemon, waitForSession)
+	registerCucDown(s)
+	registerCucStatus(s)
 }
 
 func registerListSessions(s *Server) {
@@ -765,4 +770,179 @@ func registerLaunch(s *Server) {
 			return textResult(fmt.Sprintf("Launched %s (PID %d).", name, pid))
 		},
 	)
+}
+
+// --- cuc dev container ---
+
+// runCapture runs a command in dir ("" = current dir) and returns combined output.
+func runCapture(command []string, dir string) (string, error) {
+	c := exec.Command(command[0], command[1:]...)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	return string(out), err
+}
+
+func registerCucUp(s *Server) {
+	s.RegisterTool(
+		ToolDef{
+			Name:        "sax_cuc_up",
+			Description: "Build and start the cuc (Claude Unleashed Container) dev container. Uses docker compose when a compose file is found nearby, otherwise pulls and runs the published image. May take minutes on first build.",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		func(params map[string]interface{}) ToolResult {
+			if !cuc.DockerAvailable() {
+				return errorResult("docker not found on PATH")
+			}
+
+			var log strings.Builder
+			if root := cuc.ComposeRoot(""); root != "" {
+				out, err := runCapture(cuc.ComposeUp(), root)
+				log.WriteString(out)
+				if err != nil {
+					return errorResult(fmt.Sprintf("compose up failed: %v\n%s", err, tailLines(log.String(), 20)))
+				}
+			} else {
+				out, err := runCapture(cuc.PullImage(cuc.DefaultImage), "")
+				log.WriteString(out)
+				if err != nil {
+					return errorResult(fmt.Sprintf("pull failed: %v\n%s", err, tailLines(log.String(), 20)))
+				}
+				if cuc.Exists(cuc.DefaultContainer) {
+					_, _ = runCapture(cuc.RemoveContainer(cuc.DefaultContainer), "")
+				}
+				wd, _ := os.Getwd()
+				home, _ := os.UserHomeDir()
+				out, err = runCapture(cuc.RunImage(cuc.DefaultContainer, cuc.DefaultImage, wd, home), "")
+				log.WriteString(out)
+				if err != nil {
+					return errorResult(fmt.Sprintf("docker run failed: %v\n%s", err, tailLines(log.String(), 20)))
+				}
+			}
+
+			// Container was (re)created — clear any stale Claude session so it
+			// won't be reattached to a dead container.
+			killSessionByName(cuc.SessionName)
+
+			// Make the persistent volume writable, persist config location, seed.
+			_, _ = runCapture(cuc.ChownHome(cuc.DefaultContainer), "")
+			_, _ = runCapture(cuc.EnsureConfigSymlink(cuc.DefaultContainer), "")
+			seedOut, _ := runCapture(cuc.Seed(cuc.DefaultContainer), "")
+
+			// Transpose the host login into the container (best-effort).
+			auth := "host login synced"
+			if err := cuc.SetupAuth(cuc.DefaultContainer); err != nil {
+				auth = "login sync skipped: " + err.Error()
+			}
+
+			return textResult(fmt.Sprintf("Container %q ready (%s). Launch Claude with sax_cuc_claude.\n%s", cuc.DefaultContainer, auth, tailLines(seedOut, 8)))
+		},
+	)
+}
+
+func registerCucClaude(s *Server, launchDaemon func(string, []string, string) error, waitForSession func(string) bool) {
+	s.RegisterTool(
+		ToolDef{
+			Name:        "sax_cuc_claude",
+			Description: "Launch a Claude Code instance INSIDE the cuc dev container as a background SAX session (named cuc-claude). Drive it afterward with sax_tail / sax_send. Requires the container to be running (sax_cuc_up first).",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		func(params map[string]interface{}) ToolResult {
+			if !cuc.Running(cuc.DefaultContainer) {
+				return errorResult(fmt.Sprintf("container %q is not running — call sax_cuc_up first", cuc.DefaultContainer))
+			}
+
+			name := cuc.SessionName
+			if ipc.IsSessionAlive(name) {
+				return textResult(fmt.Sprintf("%s is already running.", name))
+			}
+
+			if err := launchDaemon(name, cuc.Claude(cuc.DefaultContainer), ""); err != nil {
+				return errorResult(fmt.Sprintf("failed to start %s: %v", name, err))
+			}
+			if !waitForSession(name) {
+				return errorResult(fmt.Sprintf("timed out starting %s", name))
+			}
+			return textResult(fmt.Sprintf("Started Claude in %q as session %q. Use sax_tail/sax_send to drive it.", cuc.DefaultContainer, name))
+		},
+	)
+}
+
+func registerCucDown(s *Server) {
+	s.RegisterTool(
+		ToolDef{
+			Name:        "sax_cuc_down",
+			Description: "Stop the cuc dev container and its Claude session (cuc-claude).",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		func(params map[string]interface{}) ToolResult {
+			if !cuc.DockerAvailable() {
+				return errorResult("docker not found on PATH")
+			}
+
+			// Kill the Claude session if alive.
+			killSessionByName(cuc.SessionName)
+
+			if root := cuc.ComposeRoot(""); root != "" {
+				if out, err := runCapture(cuc.ComposeDown(), root); err != nil {
+					return errorResult(fmt.Sprintf("compose down failed: %v\n%s", err, tailLines(out, 20)))
+				}
+			} else if cuc.Exists(cuc.DefaultContainer) {
+				if out, err := runCapture(cuc.RemoveContainer(cuc.DefaultContainer), ""); err != nil {
+					return errorResult(fmt.Sprintf("remove failed: %v\n%s", err, tailLines(out, 20)))
+				}
+			}
+			return textResult("Stopped cuc container and session.")
+		},
+	)
+}
+
+func registerCucStatus(s *Server) {
+	s.RegisterTool(
+		ToolDef{
+			Name:        "sax_cuc_status",
+			Description: "Report cuc dev-container and Claude-session state as JSON (container running? session alive? docker present?).",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		func(params map[string]interface{}) ToolResult {
+			status := map[string]interface{}{
+				"container":         cuc.DefaultContainer,
+				"image":             cuc.DefaultImage,
+				"docker":            cuc.DockerAvailable(),
+				"container_running": cuc.Running(cuc.DefaultContainer),
+				"session":           cuc.SessionName,
+				"session_alive":     ipc.IsSessionAlive(cuc.SessionName),
+			}
+			if root := cuc.ComposeRoot(""); root != "" {
+				status["compose_root"] = root
+			}
+			b, _ := json.MarshalIndent(status, "", "  ")
+			return textResult(string(b))
+		},
+	)
+}
+
+// killSessionByName terminates a SAX session if it is alive, ignoring errors.
+func killSessionByName(name string) {
+	if ipc.IsSessionAlive(name) {
+		if pidData, err := os.ReadFile(ipc.PidPath(name)); err == nil {
+			pid := 0
+			fmt.Sscanf(strings.TrimSpace(string(pidData)), "%d", &pid)
+			if pid > 0 {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(os.Interrupt)
+				}
+			}
+		}
+	}
+	ipc.CleanupSocket(name)
+	os.Remove(ipc.PidPath(name))
+}
+
+// tailLines returns the last n non-empty-trimmed lines of s.
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }

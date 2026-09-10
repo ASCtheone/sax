@@ -178,6 +178,22 @@ sax nx stop                  # stop all NX sessions
 
 SAX scans for `nx.json` and `project.json` files, finds targets named `serve`, `dev`, or `start`, and runs them as detached sessions named after the project.
 
+## Claude Dev Container (cuc)
+
+SAX can bring up the [cuc](https://github.com/ASCtheone/cuc) dev container and run
+a **Claude Code instance inside it as a SAX session** — so the containerized
+Claude gets detach/reattach plus the scripting/MCP API.
+
+```bash
+sax cuc up                   # build+start via compose, or pull ghcr.io/asctheone/cuc
+sax cuc claude               # launch/attach Claude inside the container (session: cuc-claude)
+sax cuc status               # container + session state as JSON
+sax cuc down                 # stop the session and the container
+```
+
+`up` uses `docker compose` when a compose file is found nearby, otherwise pulls
+and runs the published image. `claude` requires the container to be running.
+
 ## Agent / Scripting API
 
 Programmatic access for CI, scripts, and AI agents:
@@ -244,6 +260,10 @@ Add to your Claude Code config (`~/.claude.json`):
 | `sax_nx_list` | List NX workspace projects with serve targets |
 | `sax_nx_serve` | Start an NX project's serve target as a session |
 | `sax_nx_stop` | Stop a running NX session (or all) |
+| `sax_cuc_up` | Build/start the cuc dev container (compose or pull image) |
+| `sax_cuc_claude` | Launch Claude inside the cuc container as a session |
+| `sax_cuc_down` | Stop the cuc container and its Claude session |
+| `sax_cuc_status` | Report cuc container + session state as JSON |
 
 ### Examples
 
