@@ -22,6 +22,7 @@ type Server struct {
 	sessions *SessionManager
 	done     chan struct{}
 	wg       sync.WaitGroup
+	createMu sync.Mutex // serializes ensureSession
 
 	// Initial command to run instead of default shell (empty = shell)
 	InitCmd     string
@@ -32,6 +33,13 @@ type Server struct {
 	// commands when sessions are created. Never nil after doServerMode wiring.
 	Saxrc *saxrc.Config
 }
+
+// Size used for a session started before any client attaches; the first
+// attach resizes it to the client's terminal.
+const (
+	defaultCols = 120
+	defaultRows = 40
+)
 
 // NewServer creates a new server for the named session.
 func NewServer(name string) *Server {
@@ -80,6 +88,12 @@ func (s *Server) Run() error {
 	}()
 
 	log.Printf("sax server %q listening (pid %d)", s.name, os.Getpid())
+
+	// Start the session now so a detached command (sax -x, sax net up, MCP
+	// sax_exec) runs immediately instead of waiting for the first attach.
+	if _, err := s.ensureSession(defaultCols, defaultRows); err != nil {
+		log.Printf("failed to start session: %v", err)
+	}
 
 	// Accept loop
 	for {
@@ -134,20 +148,12 @@ func (s *Server) handleClient(conn net.Conn) {
 	}
 
 	// Get or create the managed session
-	ms := s.sessions.Get(s.name)
-	if ms == nil {
-		ms, err = s.sessions.Create(s.name, attach.W, attach.H, s.InitCmd, s.InitCmdArgs, s.InitWorkDir)
-		if err != nil {
-			log.Printf("failed to create session: %v", err)
-			_ = WriteMsg(conn, MsgError, &ErrorMsg{Message: err.Error()})
-			conn.Close()
-			return
-		}
-
-		// Set up pane exit handler
-		ms.onPaneExit = func(paneID string) {
-			s.handlePaneExit(paneID)
-		}
+	ms, err := s.ensureSession(attach.W, attach.H)
+	if err != nil {
+		log.Printf("failed to create session: %v", err)
+		_ = WriteMsg(conn, MsgError, &ErrorMsg{Message: err.Error()})
+		conn.Close()
+		return
 	}
 
 	// Create client connection
@@ -167,6 +173,25 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	// If no more clients and no sessions, server could shut down
 	// But we keep running to allow reattach
+}
+
+// ensureSession returns the managed session, creating it at w x h (and
+// starting its initial command) if it does not exist yet.
+func (s *Server) ensureSession(w, h int) (*ManagedSession, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+
+	if ms := s.sessions.Get(s.name); ms != nil {
+		return ms, nil
+	}
+	ms, err := s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir)
+	if err != nil {
+		return nil, err
+	}
+	ms.onPaneExit = func(paneID string) {
+		s.handlePaneExit(paneID)
+	}
+	return ms, nil
 }
 
 // handleQuery responds to a session info query and closes the connection.

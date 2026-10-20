@@ -1,4 +1,4 @@
-// SPIKE: sax vnet interpose shim (macOS, DYLD_INSERT_LIBRARIES).
+// sax vnet interpose shim, network half (macOS, DYLD_INSERT_LIBRARIES).
 //
 // Gives each session a *virtual* IP inside a router subnet without root:
 //   bind(any|loopback|self : P)  -> real bind 127.0.0.1:0, registered as self:P
@@ -8,11 +8,10 @@
 //   getaddrinfo("bob.lan")       -> names table
 //   getsockname(fd)              -> virtual address the app asked for
 //
-// Table (per router) is plain files under $SAX_VNET_DIR; the real
-// implementation moves this into the sax daemon + a shared mmap.
+// Tables live under $SAX_VNET_DIR and are written by sax (internal/vnet):
 //   names            "<name> <ipv4>"
 //   svc              "<vip> <vport> <target-ip> <target-port>"
-//   ports/<ip>_<p>   "<real-port> <pid>"
+//   ports/<ip>_<p>   "<real-port> <pid>"   (written by this shim)
 //
 // Env: SAX_VNET_DIR, SAX_VNET_IP, SAX_VNET_SUBNET (a.b.c.d/n)
 
@@ -29,12 +28,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define DYLD_INTERPOSE(_repl, _orig)                                        \
-    __attribute__((used)) static struct {                                  \
-        const void *repl;                                                   \
-        const void *orig;                                                   \
-    } _interpose_##_orig __attribute__((section("__DATA,__interpose"))) = { \
-        (const void *)(unsigned long)&_repl, (const void *)(unsigned long)&_orig};
+#include "shim.h"
 
 #define MAX_FDS 8192
 #define LOOPBACK htonl(INADDR_LOOPBACK)

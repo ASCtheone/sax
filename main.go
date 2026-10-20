@@ -25,6 +25,7 @@ import (
 	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/theme"
 	"github.com/asc/sax/internal/updater"
+	"github.com/asc/sax/internal/vnet"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -238,7 +239,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "  usage: sax -x <name> <command...>")
 			os.Exit(1)
 		}
-		doExecSession(parsed.name, parsed.command, parsed.attach, parsed.workDir)
+		doExecSession(parsed.name, parsed.command, parsed.attach, parsed.workDir,
+			netEnvFor(parsed.name, parsed.netFlag, parsed.ip)...)
 
 	case parsed.create:
 		if parsed.name == "" {
@@ -246,7 +248,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
-		doCreateSession(parsed.name, parsed.attach)
+		doCreateSession(parsed.name, parsed.attach, netEnvFor(parsed.name, parsed.netFlag, parsed.ip)...)
 
 	case parsed.attach:
 		if parsed.name == "" {
@@ -273,6 +275,8 @@ type parsedArgs struct {
 	name    string
 	command []string
 	workDir string
+	netFlag string // --net <router>[:<host>]
+	ip      string // --ip <addr> inside the router
 }
 
 func parseArgs(args []string) parsedArgs {
@@ -284,6 +288,12 @@ func parseArgs(args []string) parsedArgs {
 		if args[i] == "--dir" && i+1 < len(args) {
 			p.workDir = args[i+1]
 			i++ // skip value
+		} else if args[i] == "--net" && i+1 < len(args) {
+			p.netFlag = args[i+1]
+			i++
+		} else if args[i] == "--ip" && i+1 < len(args) {
+			p.ip = args[i+1]
+			i++
 		} else {
 			filtered = append(filtered, args[i])
 		}
@@ -642,7 +652,7 @@ func doKillSession(name string) {
 	os.Remove(ipc.PidPath(name))
 }
 
-func doCreateSession(name string, attach bool) {
+func doCreateSession(name string, attach bool, extraEnv ...string) {
 	if ipc.IsSessionAlive(name) {
 		if attach {
 			connectClient(name)
@@ -652,7 +662,7 @@ func doCreateSession(name string, attach bool) {
 		return
 	}
 
-	if err := launchDaemon(name, nil, ""); err != nil {
+	if err := launchDaemon(name, nil, "", extraEnv...); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -677,13 +687,13 @@ func doAttach(name string) {
 	connectClient(name)
 }
 
-func doExecSession(name string, command []string, attach bool, workDir string) {
+func doExecSession(name string, command []string, attach bool, workDir string, extraEnv ...string) {
 	if ipc.IsSessionAlive(name) {
 		fmt.Fprintf(os.Stderr, "sax: session %q already exists\n", name)
 		os.Exit(1)
 	}
 
-	if err := launchDaemon(name, command, workDir); err != nil {
+	if err := launchDaemon(name, command, workDir, extraEnv...); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -1210,7 +1220,10 @@ func doStatus(name string) {
 
 func doMCP() {
 	srv := mcp.NewServer("sax", version)
-	mcp.RegisterAllTools(srv, launchDaemon, waitForSession)
+	launch := func(name string, command []string, workDir string) error {
+		return launchDaemon(name, command, workDir)
+	}
+	mcp.RegisterAllTools(srv, launch, waitForSession)
 	srv.Run()
 }
 
@@ -1280,7 +1293,8 @@ func doServerMode(name string, command []string, workDir string) {
 	if n, ok := rc.HistoryLimit(); ok {
 		scrollback.SetDefaultCapacity(n)
 	}
-	pty.Configure(rc.Shell(), rc.EnvStrings())
+	// Sessions inside a vnet router add the shim settings to every pane.
+	pty.Configure(rc.Shell(), append(rc.EnvStrings(), vnet.PaneEnv(os.Getenv)...))
 
 	// "set default-dir" provides a fallback working directory when one was not
 	// supplied explicitly via --dir.
@@ -1416,7 +1430,10 @@ func checkForUpdateBackground() {
 
 // --- Helpers ---
 
-func launchDaemon(name string, command []string, workDir string) error {
+// launchDaemon starts the session daemon. extraEnv is added on top of the
+// caller's environment, minus any vnet settings inherited from a networked
+// pane (so a session never silently joins its parent's router).
+func launchDaemon(name string, command []string, workDir string, extraEnv ...string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get executable: %w", err)
@@ -1436,7 +1453,8 @@ func launchDaemon(name string, command []string, workDir string) error {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	// Force true color in the daemon process so lipgloss renders ANSI colors
-	cmd.Env = append(os.Environ(), "COLORTERM=truecolor")
+	cmd.Env = append(vnet.StripEnv(os.Environ()), "COLORTERM=truecolor")
+	cmd.Env = append(cmd.Env, extraEnv...)
 
 	setProcAttr(cmd)
 

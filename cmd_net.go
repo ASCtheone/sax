@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +19,10 @@ const netUsage = `usage: sax net                                 list routers
        sax net map <router> <pattern> <target>   append a rule (first match wins)
        sax net unmap <router> <pattern>
        sax net check [-f sax.net.yaml]           validate an env file
+       sax net up [-f sax.net.yaml]              start the env file's sessions
+       sax net down <router> | -f <file>         stop a router's sessions
+       sax -x <name> --net <router>[:<host>] [--ip A] <cmd...>
+                                                 run a session inside a router
 
 rules: bob.lan/api/* -> api:3200   HTTP route, path forwarded unchanged
        db.lan:5432   -> db:5432    TCP mapping (no proxy)
@@ -28,9 +31,11 @@ rules: bob.lan/api/* -> api:3200   HTTP route, path forwarded unchanged
 // netFlagsWithValue are the sax net flags that consume the next argument.
 var netFlagsWithValue = map[string]bool{"--subnet": true, "--domain": true, "-f": true}
 
-func vnetStore() vnet.Store {
-	return vnet.NewStore(filepath.Join(filepath.Dir(ipc.SessionsDir()), "vnet"))
-}
+func vnetRoot() string { return filepath.Join(filepath.Dir(ipc.SessionsDir()), "vnet") }
+
+func vnetStore() vnet.Store { return vnet.NewStore(vnetRoot()) }
+
+func ipcSessionAlive(name string) bool { return ipc.IsSessionAlive(name) }
 
 // doNet dispatches `sax net <command>`.
 func doNet(args []string) {
@@ -48,7 +53,7 @@ func doNet(args []string) {
 	case "create":
 		err = netCreate(os.Stdout, vnetStore(), pos, flagValue(args, "--subnet"), flagValue(args, "--domain"))
 	case "rm", "remove":
-		err = netRemove(os.Stdout, vnetStore(), pos)
+		err = netRemove(os.Stdout, vnetStore(), daemonRunner{}, pos)
 	case "inspect", "show":
 		err = netInspect(os.Stdout, vnetStore(), pos)
 	case "map":
@@ -57,6 +62,13 @@ func doNet(args []string) {
 		err = netUnmap(os.Stdout, vnetStore(), pos)
 	case "check":
 		err = netCheck(os.Stdout, flagValue(args, "-f"))
+	case "up":
+		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"))
+	case "down":
+		var router string
+		if router, err = routerFromArgs(pos, flagValue(args, "-f")); err == nil {
+			err = netDown(os.Stdout, vnetStore(), daemonRunner{}, router)
+		}
 	case "help", "-h", "--help":
 		fmt.Println(netUsage)
 	default:
@@ -133,9 +145,16 @@ func netCreate(w io.Writer, s vnet.Store, pos []string, subnet, domain string) e
 	return nil
 }
 
-func netRemove(w io.Writer, s vnet.Store, pos []string) error {
+func netRemove(w io.Writer, s vnet.Store, run sessionRunner, pos []string) error {
 	if err := requireArgs(pos, 1, "rm <router>"); err != nil {
 		return err
+	}
+	r, err := s.Get(pos[0])
+	if err != nil {
+		return err
+	}
+	if alive := runningOwners(r, run); len(alive) > 0 {
+		return fmt.Errorf("router %s still has running sessions %v (sax net down %s first)", r.Name, alive, r.Name)
 	}
 	if err := s.Remove(pos[0]); err != nil {
 		return err
@@ -206,10 +225,7 @@ func netCheck(w io.Writer, path string) error {
 	if path == "" {
 		path = vnet.EnvFileName
 	}
-	e, err := vnet.LoadEnvFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s not found (pass -f <file>)", path)
-	}
+	e, err := loadEnvFile(path)
 	if err != nil {
 		return err
 	}

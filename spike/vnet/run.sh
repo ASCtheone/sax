@@ -3,7 +3,7 @@
 # :4200, plus a bob.lan service -> api:3200. No sudo, no loopback aliases.
 set -euo pipefail
 cd "$(dirname "$0")"
-clang -dynamiclib -O2 -o libsaxvnet.dylib shim.c
+clang -dynamiclib -O2 -o libsaxvnet.dylib ../../internal/vnet/shim/src/shim.c ../../internal/vnet/shim/src/exec.c
 SHIM="$PWD/libsaxvnet.dylib"
 STATE="$(mktemp -d)"
 SUBNET=10.12.12.0/24

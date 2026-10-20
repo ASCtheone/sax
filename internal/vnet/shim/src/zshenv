@@ -1,0 +1,6 @@
+# sax vnet: zsh is SIP-protected, so dyld dropped DYLD_INSERT_LIBRARIES when
+# this shell started. Put it back for everything the shell runs, then hand
+# over to the user's own startup files.
+export DYLD_INSERT_LIBRARIES="$SAX_VNET_SHIM"
+if [[ -n "$SAX_VNET_ZDOTDIR" ]]; then ZDOTDIR="$SAX_VNET_ZDOTDIR"; else unset ZDOTDIR; fi
+[[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"

@@ -1,0 +1,218 @@
+package vnet
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/asc/sax/internal/vnet/shim"
+)
+
+var testShim = shim.Paths{
+	Dir:      "/s",
+	Lib:      "/s/libsaxvnet.dylib",
+	Reinject: "/s/reinject.cjs",
+	ZDotDir:  "/s/zdotdir",
+}
+
+func envMap(kvs []string) map[string]string {
+	m := map[string]string{}
+	for _, kv := range kvs {
+		k, v, _ := strings.Cut(kv, "=")
+		m[k] = v
+	}
+	return m
+}
+
+func TestHostFromSessionName(t *testing.T) {
+	cases := map[string]string{
+		"api":       "api",
+		"v1.api":    "api",
+		"V1.Web-2":  "web-2",
+		"proj.v1.x": "x",
+		"under_bar": "",
+		"v1.":       "",
+	}
+	for in, want := range cases {
+		got, err := HostFromSessionName(in)
+		if want == "" {
+			if err == nil {
+				t.Errorf("HostFromSessionName(%q) = %q, want error", in, got)
+			}
+			continue
+		}
+		if err != nil || got != want {
+			t.Errorf("HostFromSessionName(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}
+
+func TestParseNetFlag(t *testing.T) {
+	r, h, err := ParseNetFlag("v1:api")
+	if err != nil || r != "v1" || h != "api" {
+		t.Errorf("v1:api -> %q %q %v", r, h, err)
+	}
+	r, h, err = ParseNetFlag("v1")
+	if err != nil || r != "v1" || h != "" {
+		t.Errorf("v1 -> %q %q %v", r, h, err)
+	}
+	for _, bad := range []string{"", ":api", "v1:", "V 1", "v1:a b"} {
+		if _, _, err := ParseNetFlag(bad); err == nil {
+			t.Errorf("ParseNetFlag(%q) expected error", bad)
+		}
+	}
+}
+
+func TestDaemonEnv(t *testing.T) {
+	m := Member{Router: "v1", Host: "api", IP: "10.12.12.4", Subnet: "10.12.12.0/24", Dir: "/state/v1"}
+	env := envMap(DaemonEnv(m, testShim))
+	want := map[string]string{
+		EnvDir:      "/state/v1",
+		EnvIP:       "10.12.12.4",
+		EnvSubnet:   "10.12.12.0/24",
+		EnvRouter:   "v1",
+		EnvHost:     "api",
+		EnvShim:     testShim.Lib,
+		EnvReinject: testShim.Reinject,
+		EnvZWrapper: testShim.ZDotDir,
+	}
+	for k, v := range want {
+		if env[k] != v {
+			t.Errorf("%s = %q, want %q", k, env[k], v)
+		}
+	}
+	if _, ok := env["DYLD_INSERT_LIBRARIES"]; ok {
+		t.Error("daemon itself must not load the shim")
+	}
+}
+
+func TestPaneEnv(t *testing.T) {
+	base := map[string]string{
+		EnvShim:        testShim.Lib,
+		EnvReinject:    testShim.Reinject,
+		EnvZWrapper:    testShim.ZDotDir,
+		"NODE_OPTIONS": "--max-old-space-size=4096",
+		"ZDOTDIR":      "/home/me/.config/zsh",
+	}
+	env := envMap(PaneEnv(func(k string) string { return base[k] }))
+
+	if env["DYLD_INSERT_LIBRARIES"] != testShim.Lib {
+		t.Errorf("DYLD = %q", env["DYLD_INSERT_LIBRARIES"])
+	}
+	if env["NODE_OPTIONS"] != `--max-old-space-size=4096 --require "/s/reinject.cjs"` {
+		t.Errorf("NODE_OPTIONS = %q (must keep the user's options)", env["NODE_OPTIONS"])
+	}
+	if env["ZDOTDIR"] != testShim.ZDotDir || env[EnvOrigZDotDir] != "/home/me/.config/zsh" {
+		t.Errorf("zsh wrapper env = %q / %q", env["ZDOTDIR"], env[EnvOrigZDotDir])
+	}
+	if !strings.Contains(env["PROMPT_COMMAND"], "DYLD_INSERT_LIBRARIES") {
+		t.Errorf("PROMPT_COMMAND = %q", env["PROMPT_COMMAND"])
+	}
+}
+
+func TestPaneEnv_Idempotent(t *testing.T) {
+	base := map[string]string{
+		EnvShim:          testShim.Lib,
+		EnvReinject:      testShim.Reinject,
+		EnvZWrapper:      testShim.ZDotDir,
+		"NODE_OPTIONS":   `--require "/s/reinject.cjs"`,
+		"PROMPT_COMMAND": "my_prompt",
+	}
+	env := envMap(PaneEnv(func(k string) string { return base[k] }))
+	if env["NODE_OPTIONS"] != `--require "/s/reinject.cjs"` {
+		t.Errorf("reinject added twice: %q", env["NODE_OPTIONS"])
+	}
+	if _, ok := env["PROMPT_COMMAND"]; ok {
+		t.Error("existing PROMPT_COMMAND must be left alone")
+	}
+	if _, ok := env[EnvOrigZDotDir]; ok {
+		t.Error("no original ZDOTDIR to remember")
+	}
+}
+
+func TestPaneEnv_NotNetworked(t *testing.T) {
+	if env := PaneEnv(func(string) string { return "" }); env != nil {
+		t.Errorf("PaneEnv outside a router = %v, want nil", env)
+	}
+}
+
+func TestWrapScript(t *testing.T) {
+	got := WrapScript("npm run start:dev", func(k string) string {
+		if k == EnvShim {
+			return "/s/lib.dylib"
+		}
+		return ""
+	})
+	if got != "export DYLD_INSERT_LIBRARIES='/s/lib.dylib'\nnpm run start:dev" {
+		t.Errorf("WrapScript = %q", got)
+	}
+	if got := WrapScript("x", func(string) string { return "" }); got != "x" {
+		t.Errorf("unwrapped = %q", got)
+	}
+}
+
+func TestOwners(t *testing.T) {
+	r, _, _ := mustRouter(t).WithSession("api", "")
+	r2 := r.WithOwner("api", "v1.api")
+	if r2.Owners["api"] != "v1.api" || len(r.Owners) != 0 {
+		t.Errorf("WithOwner: %v / original %v", r2.Owners, r.Owners)
+	}
+	r3 := r2.WithoutSession("api")
+	if _, ok := r3.Owners["api"]; ok {
+		t.Error("WithoutSession should drop the owner too")
+	}
+}
+
+func TestStripEnv(t *testing.T) {
+	daemon := map[string]string{
+		EnvShim:        testShim.Lib,
+		EnvReinject:    testShim.Reinject,
+		EnvZWrapper:    testShim.ZDotDir,
+		"NODE_OPTIONS": "--max-old-space-size=4096",
+		"ZDOTDIR":      "/home/me/.config/zsh",
+	}
+	pane := envMap(PaneEnv(func(k string) string { return daemon[k] }))
+	for k, v := range daemon {
+		if _, set := pane[k]; !set {
+			pane[k] = v
+		}
+	}
+	pane[EnvIP] = "10.12.12.4"
+	pane["HOME"] = "/home/me"
+
+	var environ []string
+	for k, v := range pane {
+		environ = append(environ, k+"="+v)
+	}
+	got := envMap(StripEnv(environ))
+
+	for k := range got {
+		if strings.HasPrefix(k, "SAX_VNET_") {
+			t.Errorf("%s not stripped", k)
+		}
+	}
+	if _, ok := got["DYLD_INSERT_LIBRARIES"]; ok {
+		t.Error("DYLD_INSERT_LIBRARIES not stripped")
+	}
+	if _, ok := got["PROMPT_COMMAND"]; ok {
+		t.Error("our PROMPT_COMMAND not stripped")
+	}
+	if got["NODE_OPTIONS"] != "--max-old-space-size=4096" {
+		t.Errorf("NODE_OPTIONS = %q, want the user's part only", got["NODE_OPTIONS"])
+	}
+	if got["ZDOTDIR"] != "/home/me/.config/zsh" {
+		t.Errorf("ZDOTDIR = %q, want the user's original", got["ZDOTDIR"])
+	}
+	if got["HOME"] != "/home/me" {
+		t.Error("unrelated variables must survive")
+	}
+}
+
+func TestStripEnv_LeavesForeignValuesAlone(t *testing.T) {
+	in := []string{"PROMPT_COMMAND=history -a", "ZDOTDIR=/mine", "NODE_OPTIONS=--inspect",
+		"DYLD_INSERT_LIBRARIES=/my/own.dylib"}
+	got := envMap(StripEnv(in))
+	if got["PROMPT_COMMAND"] != "history -a" || got["ZDOTDIR"] != "/mine" || got["NODE_OPTIONS"] != "--inspect" ||
+		got["DYLD_INSERT_LIBRARIES"] != "/my/own.dylib" {
+		t.Errorf("StripEnv changed foreign values: %v", got)
+	}
+}

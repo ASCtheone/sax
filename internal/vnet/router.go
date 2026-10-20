@@ -25,6 +25,7 @@ type Router struct {
 	Sessions map[string]string `json:"sessions"` // session name -> virtual IP
 	VIPs     map[string]string `json:"vips"`     // rule hostname -> service VIP
 	Rules    []string          `json:"rules"`    // canonical rules, in match order
+	Owners   map[string]string `json:"owners"`   // session name -> sax session running it
 }
 
 // NewRouter validates and builds an empty router.
@@ -36,6 +37,7 @@ func NewRouter(name, subnet, domain string) (Router, error) {
 		Sessions: map[string]string{},
 		VIPs:     map[string]string{},
 		Rules:    []string{},
+		Owners:   map[string]string{},
 	}
 	if err := r.validateHeader(); err != nil {
 		return Router{}, err
@@ -85,6 +87,10 @@ func (r Router) clone() Router {
 		out.VIPs[k] = v
 	}
 	out.Rules = append([]string{}, r.Rules...)
+	out.Owners = make(map[string]string, len(r.Owners))
+	for k, v := range r.Owners {
+		out.Owners[k] = v
+	}
 	return out
 }
 
@@ -163,10 +169,19 @@ func (r Router) highestFree(p netip.Prefix, used map[string]bool) (string, error
 	return "", fmt.Errorf("router %s: subnet %s is full", r.Name, p)
 }
 
-// WithoutSession forgets a session's address.
+// WithoutSession forgets a session's address and owner.
 func (r Router) WithoutSession(name string) Router {
 	out := r.clone()
 	delete(out.Sessions, name)
+	delete(out.Owners, name)
+	return out
+}
+
+// WithOwner records which sax session runs a router session, so `sax net
+// down` can stop it.
+func (r Router) WithOwner(name, saxSession string) Router {
+	out := r.clone()
+	out.Owners[name] = saxSession
 	return out
 }
 

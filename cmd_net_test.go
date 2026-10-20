@@ -90,10 +90,10 @@ func TestNetCommands_Flow(t *testing.T) {
 		t.Errorf("list after unmap:\n%s", out.String())
 	}
 
-	if err := netRemove(&out, s, []string{"v1"}); err != nil {
+	if err := netRemove(&out, s, newFakeRunner(), []string{"v1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := netRemove(&out, s, []string{"v1"}); err == nil {
+	if err := netRemove(&out, s, newFakeRunner(), []string{"v1"}); err == nil {
 		t.Error("removing twice should fail")
 	}
 }
