@@ -13,6 +13,15 @@ import (
 
 const localhostSuffix = ".localhost"
 
+// proxyTransport forwards requests as the client sent them: Go's default
+// transport would ask for gzip on its own and unpack it, which hides what
+// the app really sent and costs time for nothing on loopback.
+var proxyTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DisableCompression = true
+	return t
+}()
+
 // serveHost handles host-side requests: <host>.<router>.localhost always,
 // and names under registered domains (app1.lan, app1.v2.lan).
 func (g *Gateway) serveHost(w http.ResponseWriter, req *http.Request) {
@@ -75,16 +84,25 @@ func (g *Gateway) serve(w http.ResponseWriter, req *http.Request, routerName, ho
 		return
 	}
 
+	banner := wantsBanner(r, req)
 	proxy := &httputil.ReverseProxy{
+		Transport: proxyTransport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(&url.URL{Scheme: "http", Host: backend})
 			pr.Out.Host = pr.In.Host
 			pr.SetXForwarded()
+			if banner {
+				pr.Out.Header.Del("Accept-Encoding") // uncompressed HTML, so the banner can go in
+			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			http.Error(w, fmt.Sprintf("sax vnet: %s in router %s: %v", rule.Target, routerName, err),
 				http.StatusBadGateway)
 		},
+	}
+	if banner {
+		app := appFor(r, rule.Target)
+		proxy.ModifyResponse = func(resp *http.Response) error { return g.addBanner(resp, r, app, req.Host) }
 	}
 	proxy.ServeHTTP(w, req)
 }

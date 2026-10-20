@@ -293,7 +293,23 @@ func printRouter(w io.Writer, r vnet.Router, warnings []string) {
 		fmt.Fprintln(tw, "-\t-\t-\t-")
 	}
 	_ = tw.Flush()
+	fmt.Fprintf(w, "\nbanner: %s\n", bannerSummary(r.Banner))
 	printWarnings(w, warnings)
+}
+
+// bannerSummary describes a router's page banner for inspect/check.
+func bannerSummary(b vnet.Banner) string {
+	switch {
+	case b.Off:
+		return "off"
+	case b.File != "":
+		return "file " + b.File
+	case b.HTML != "":
+		return "custom html"
+	case b.Text != "":
+		return fmt.Sprintf("text %q", b.Text)
+	}
+	return "default (branch · commit · worktree · router › app)"
 }
 
 // warningsAbout keeps the warnings that mention rule, so `map` reports only

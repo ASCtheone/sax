@@ -202,3 +202,20 @@ func TestNetUp_ExistingAppsKeepTheirIPs(t *testing.T) {
 		t.Errorf("db got %q", db)
 	}
 }
+
+func TestBannerSummary(t *testing.T) {
+	cases := map[string]vnet.Banner{
+		"off":             {Off: true},
+		"file /x.html":    {File: "/x.html"},
+		"custom html":     {HTML: "<b>"},
+		`text "{branch}"`: {Text: "{branch}"},
+	}
+	for want, b := range cases {
+		if got := bannerSummary(b); got != want {
+			t.Errorf("bannerSummary(%+v) = %q, want %q", b, got, want)
+		}
+	}
+	if got := bannerSummary(vnet.Banner{}); !strings.HasPrefix(got, "default") {
+		t.Errorf("default = %q", got)
+	}
+}

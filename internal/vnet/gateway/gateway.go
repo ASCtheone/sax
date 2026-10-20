@@ -63,6 +63,7 @@ type Gateway struct {
 	hostAddr atomic.Value // string, set once the host listener is up
 
 	registration atomic.Pointer[vnet.Registration]
+	git          gitCache
 
 	mu           sync.Mutex
 	hostDNS      *hostDNS
