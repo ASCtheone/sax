@@ -22,16 +22,28 @@ type Server struct {
 	sessions *SessionManager
 	done     chan struct{}
 	wg       sync.WaitGroup
+	createMu sync.Mutex // serializes ensureSession
 
 	// Initial command to run instead of default shell (empty = shell)
 	InitCmd     string
 	InitCmdArgs []string
 	InitWorkDir string
 
+	// LazyStart defers creating the session (and running its command) until
+	// the first client attaches; otherwise it starts with the daemon.
+	LazyStart bool
+
 	// Saxrc is the parsed ~/.saxrc, consulted for startup hooks and run
 	// commands when sessions are created. Never nil after doServerMode wiring.
 	Saxrc *saxrc.Config
 }
+
+// Size used for a session started before any client attaches; the first
+// attach resizes it to the client's terminal.
+const (
+	defaultCols = 120
+	defaultRows = 40
+)
 
 // NewServer creates a new server for the named session.
 func NewServer(name string) *Server {
@@ -80,6 +92,14 @@ func (s *Server) Run() error {
 	}()
 
 	log.Printf("sax server %q listening (pid %d)", s.name, os.Getpid())
+
+	// Start the session now so a detached command (sax -x, sax net up, MCP
+	// sax_exec) runs immediately instead of waiting for the first attach.
+	if !s.LazyStart {
+		if _, err := s.ensureSession(defaultCols, defaultRows); err != nil {
+			log.Printf("failed to start session: %v", err)
+		}
+	}
 
 	// Accept loop
 	for {
@@ -134,20 +154,12 @@ func (s *Server) handleClient(conn net.Conn) {
 	}
 
 	// Get or create the managed session
-	ms := s.sessions.Get(s.name)
-	if ms == nil {
-		ms, err = s.sessions.Create(s.name, attach.W, attach.H, s.InitCmd, s.InitCmdArgs, s.InitWorkDir)
-		if err != nil {
-			log.Printf("failed to create session: %v", err)
-			_ = WriteMsg(conn, MsgError, &ErrorMsg{Message: err.Error()})
-			conn.Close()
-			return
-		}
-
-		// Set up pane exit handler
-		ms.onPaneExit = func(paneID string) {
-			s.handlePaneExit(paneID)
-		}
+	ms, err := s.ensureSession(attach.W, attach.H)
+	if err != nil {
+		log.Printf("failed to create session: %v", err)
+		_ = WriteMsg(conn, MsgError, &ErrorMsg{Message: err.Error()})
+		conn.Close()
+		return
 	}
 
 	// Create client connection
@@ -167,6 +179,18 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	// If no more clients and no sessions, server could shut down
 	// But we keep running to allow reattach
+}
+
+// ensureSession returns the managed session, creating it at w x h (and
+// starting its initial command) if it does not exist yet.
+func (s *Server) ensureSession(w, h int) (*ManagedSession, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+
+	if ms := s.sessions.Get(s.name); ms != nil {
+		return ms, nil
+	}
+	return s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir, s.handlePaneExit)
 }
 
 // handleQuery responds to a session info query and closes the connection.
@@ -214,19 +238,28 @@ func (s *Server) handleQueryTail(conn net.Conn, ms *ManagedSession, args string)
 
 	content := ""
 	if ms != nil {
-		pane := ms.Session.ActivePane()
-		if pane != nil {
-			rendered := pane.Render()
-			lines := strings.Split(rendered, "\n")
-			start := len(lines) - n
-			if start < 0 {
-				start = 0
-			}
-			content = strings.Join(lines[start:], "\n")
+		if pane := ms.Session.ActivePane(); pane != nil {
+			content = tailLines(pane.Render(), n)
 		}
 	}
 
 	_ = WriteMsg(conn, MsgQueryReply, &map[string]string{"tail": content})
+}
+
+// tailLines returns the last n lines of a rendered pane, ignoring the blank
+// rows below the output (a fresh 40-row pane is mostly empty, and counting
+// those rows would hide short output from `sax --tail` and sax_tail).
+func tailLines(rendered string, n int) string {
+	lines := strings.Split(rendered, "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	start := end - n
+	if start < 0 {
+		start = 0
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // handleQuerySend writes text into the active pane's PTY.

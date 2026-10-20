@@ -15,15 +15,22 @@ import (
 )
 
 // RegisterAllTools registers all SAX MCP tools on the server.
-func RegisterAllTools(s *Server, launchDaemon func(name string, command []string, workDir string) error, waitForSession func(name string) bool) {
+// LaunchFunc starts a session daemon; env is added to its environment.
+type LaunchFunc func(name string, command []string, workDir string, env ...string) error
+
+// NetJoinFunc reserves an address for a session in a vnet router
+// (--net <router>[:<host>], optional ip) and returns the daemon env.
+type NetJoinFunc func(sessionName, net, ip string) ([]string, error)
+
+func RegisterAllTools(s *Server, launchDaemon LaunchFunc, waitForSession func(name string) bool, netJoin NetJoinFunc) {
 	registerListSessions(s)
-	registerCreateSession(s, launchDaemon, waitForSession)
+	registerCreateSession(s, launchDaemon, waitForSession, netJoin)
 	registerKillSession(s)
 	registerKillAll(s)
 	registerTail(s)
 	registerSend(s)
 	registerStatus(s)
-	registerExec(s, launchDaemon, waitForSession)
+	registerExec(s, launchDaemon, waitForSession, netJoin)
 	registerLaunch(s)
 	registerNxList(s)
 	registerNxServe(s, launchDaemon, waitForSession)
@@ -32,6 +39,7 @@ func RegisterAllTools(s *Server, launchDaemon func(name string, command []string
 	registerCucClaude(s, launchDaemon, waitForSession)
 	registerCucDown(s)
 	registerCucStatus(s)
+	registerNet(s)
 }
 
 func registerListSessions(s *Server) {
@@ -123,7 +131,7 @@ func registerListSessions(s *Server) {
 	)
 }
 
-func registerCreateSession(s *Server, launchDaemon func(string, []string, string) error, waitForSession func(string) bool) {
+func registerCreateSession(s *Server, launchDaemon LaunchFunc, waitForSession func(string) bool, netJoin NetJoinFunc) {
 	s.RegisterTool(
 		ToolDef{
 			Name:        "sax_create_session",
@@ -135,6 +143,8 @@ func registerCreateSession(s *Server, launchDaemon func(string, []string, string
 						"type":        "string",
 						"description": "Session name (alphanumeric, hyphens, underscores)",
 					},
+					"net": netProperty,
+					"ip":  ipProperty,
 				},
 				Required: []string{"name"},
 			},
@@ -152,7 +162,11 @@ func registerCreateSession(s *Server, launchDaemon func(string, []string, string
 				return textResult(fmt.Sprintf("Session %q already exists.", name))
 			}
 
-			if err := launchDaemon(name, nil, ""); err != nil {
+			env, err := joinNet(netJoin, name, params)
+			if err != nil {
+				return errorResult(err.Error())
+			}
+			if err := launchDaemon(name, nil, "", env...); err != nil {
 				return errorResult(fmt.Sprintf("failed to start daemon: %v", err))
 			}
 			if !waitForSession(name) {
@@ -420,7 +434,7 @@ func registerStatus(s *Server) {
 	)
 }
 
-func registerExec(s *Server, launchDaemon func(string, []string, string) error, waitForSession func(string) bool) {
+func registerExec(s *Server, launchDaemon LaunchFunc, waitForSession func(string) bool, netJoin NetJoinFunc) {
 	s.RegisterTool(
 		ToolDef{
 			Name:        "sax_exec",
@@ -436,6 +450,8 @@ func registerExec(s *Server, launchDaemon func(string, []string, string) error, 
 						"type":        "string",
 						"description": "Command to run (e.g. 'npm run dev', 'python server.py')",
 					},
+					"net": netProperty,
+					"ip":  ipProperty,
 				},
 				Required: []string{"name", "command"},
 			},
@@ -460,7 +476,11 @@ func registerExec(s *Server, launchDaemon func(string, []string, string) error, 
 				return errorResult("command is empty")
 			}
 
-			if err := launchDaemon(name, parts, ""); err != nil {
+			env, err := joinNet(netJoin, name, params)
+			if err != nil {
+				return errorResult(err.Error())
+			}
+			if err := launchDaemon(name, parts, "", env...); err != nil {
 				return errorResult(fmt.Sprintf("failed to start daemon: %v", err))
 			}
 			if !waitForSession(name) {
@@ -518,7 +538,7 @@ func registerNxList(s *Server) {
 	)
 }
 
-func registerNxServe(s *Server, launchDaemon func(string, []string, string) error, waitForSession func(string) bool) {
+func registerNxServe(s *Server, launchDaemon LaunchFunc, waitForSession func(string) bool) {
 	s.RegisterTool(
 		ToolDef{
 			Name:        "sax_nx_serve",
@@ -839,7 +859,7 @@ func registerCucUp(s *Server) {
 	)
 }
 
-func registerCucClaude(s *Server, launchDaemon func(string, []string, string) error, waitForSession func(string) bool) {
+func registerCucClaude(s *Server, launchDaemon LaunchFunc, waitForSession func(string) bool) {
 	s.RegisterTool(
 		ToolDef{
 			Name:        "sax_cuc_claude",

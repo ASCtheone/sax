@@ -194,6 +194,69 @@ sax cuc down                 # stop the session and the container
 `up` uses `docker compose` when a compose file is found nearby, otherwise pulls
 and runs the published image. `claude` requires the container to be running.
 
+## Virtual Networks (vnet)
+
+Run several versions of the same app side by side — same ports, compose-style
+names — with **no Docker, no VM and no sudo**. A *router* is a virtual network;
+every session in it gets its own virtual IP, so `v1` and `v2` can both listen
+on `:3200` and each resolves `api`, `db`, `bob.lan` to its own copies.
+
+```yaml
+# v1.yaml  (sax net up -f v1.yaml)
+router: v1
+subnet: 10.12.12.0/24
+domain: lan
+sessions:
+  api: { cwd: ./api, cmd: "npm run start:dev" }
+  web: { cwd: ./web, cmd: "ng serve" }
+  db:  { cmd: "postgres -D ./data" }
+routes:                        # checked in order, first match wins
+  - bob.lan/api/* -> api:3200  # HTTP route, path forwarded unchanged
+  - bob.lan/*     -> web:4200
+  - db.lan:5432   -> db:5432   # TCP mapping, no proxy
+publish:
+  - 15432 -> db:5432           # 127.0.0.1:15432 on the host
+```
+
+```bash
+sax net up -f v1.yaml        # create/update the router, start its sessions (idempotent)
+sax net up -f v2.yaml        # same app, another version, same ports
+sax net ls                   # routers
+sax net inspect v1           # sessions, IPs, rules, host URLs
+sax net down v1              # stop v1's sessions
+sax net check -f v1.yaml     # validate (e.g. warns about rules that can never match)
+
+sax net create lab --subnet 10.20.0.0/24 --domain lan
+sax net map lab 'bob.lan/api/*' api:3200
+sax net publish lab 15432 db:5432
+sax -x api --net lab npm run dev          # any session can join a router
+```
+
+Inside a router, an app requesting `http://bob.lan/api/users` hits `api`; from the host use
+`http://bob.lan.v1.localhost:7480` (the `vnet-gateway` session, started
+automatically; `sax net gateway --port 80` drops the port). The MCP server
+exposes the same through `sax_net_*` tools and a `net` parameter on `sax_exec`.
+
+How it works: virtual addresses are mapped to real loopback sockets, so it
+needs neither root nor network namespaces.
+
+- **macOS:** sessions load a small interpose library (`DYLD_INSERT_LIBRARIES`).
+- **Linux:** each pane runs under a ~1 MB seccomp supervisor that handles
+  `connect`/`bind`/`getsockname` for every program, Go and static binaries
+  included. The gateway runs a per-router DNS stub for programs that do
+  their own DNS.
+- Where supervision is blocked (Yama `ptrace_scope` ≥ 2, or a container's
+  default seccomp profile), sax warns and falls back to `LD_PRELOAD`, which
+  covers libc programs only.
+
+Both pieces are compiled once with the system C compiler
+(`xcode-select --install` / `apt install build-essential` if missing; Linux
+5.9+ for the supervisor).
+
+Limits: TCP only, and not available on Windows. On macOS, Apple's own
+binaries (e.g. `/usr/bin/curl`) bypass the library; Homebrew/nvm builds and Go
+binaries work.
+
 ## Agent / Scripting API
 
 Programmatic access for CI, scripts, and AI agents:

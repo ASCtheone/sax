@@ -63,7 +63,10 @@ func (sm *SessionManager) ConfigureHooks(newPaneHooks, runCmds []string) {
 
 // Create creates a new named session. If cmdName is non-empty, the initial
 // pane runs that command instead of the default shell.
-func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs []string, workDir string) (*ManagedSession, error) {
+// Create starts a session. onPaneExit is installed before any pane reader
+// runs, so a command that exits immediately is never missed.
+func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs []string, workDir string,
+	onPaneExit func(paneID string)) (*ManagedSession, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -92,6 +95,7 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 		Monitor:      monitor.New(alertCh),
 		alertCh:      alertCh,
 		newPaneHooks: sm.newPaneHooks,
+		onPaneExit:   onPaneExit,
 	}
 	ms.Monitor.Start()
 

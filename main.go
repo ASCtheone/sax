@@ -25,6 +25,7 @@ import (
 	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/theme"
 	"github.com/asc/sax/internal/updater"
+	"github.com/asc/sax/internal/vnet"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -138,6 +139,12 @@ func main() {
 		return
 	}
 
+	// Virtual networks: sax net <command>
+	if len(args) > 0 && args[0] == "net" {
+		doNet(args[1:])
+		return
+	}
+
 	// cuc dev-container subcommand: sax cuc <command>
 	if len(args) > 0 && args[0] == "cuc" {
 		cucArgs := args[1:]
@@ -232,7 +239,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "  usage: sax -x <name> <command...>")
 			os.Exit(1)
 		}
-		doExecSession(parsed.name, parsed.command, parsed.attach, parsed.workDir)
+		doExecSession(parsed.name, parsed.command, parsed.attach, parsed.workDir,
+			netEnvFor(parsed.name, parsed.netFlag, parsed.ip)...)
 
 	case parsed.create:
 		if parsed.name == "" {
@@ -240,7 +248,7 @@ func main() {
 			printUsage()
 			os.Exit(1)
 		}
-		doCreateSession(parsed.name, parsed.attach)
+		doCreateSession(parsed.name, parsed.attach, netEnvFor(parsed.name, parsed.netFlag, parsed.ip)...)
 
 	case parsed.attach:
 		if parsed.name == "" {
@@ -267,6 +275,8 @@ type parsedArgs struct {
 	name    string
 	command []string
 	workDir string
+	netFlag string // --net <router>[:<host>]
+	ip      string // --ip <addr> inside the router
 }
 
 func parseArgs(args []string) parsedArgs {
@@ -278,6 +288,12 @@ func parseArgs(args []string) parsedArgs {
 		if args[i] == "--dir" && i+1 < len(args) {
 			p.workDir = args[i+1]
 			i++ // skip value
+		} else if args[i] == "--net" && i+1 < len(args) {
+			p.netFlag = args[i+1]
+			i++
+		} else if args[i] == "--ip" && i+1 < len(args) {
+			p.ip = args[i+1]
+			i++
 		} else {
 			filtered = append(filtered, args[i])
 		}
@@ -382,7 +398,13 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
     nx: sax nx                       list NX projects with serve targets
        sax nx serve [app]           serve an app (interactive if no app)
        sax nx stop [app]            stop an app (all NX sessions if no app)
-       sax nx <app>                 shorthand for sax nx serve <app>`)
+       sax nx <app>                 shorthand for sax nx serve <app>
+
+   net: sax net                      list virtual routers (sax net help for more)
+       sax net create <router>      create a router
+       sax net map <router> <pattern> <target>
+                                    add a rule, e.g. bob.lan/api/* api:3200
+       sax net check [-f file]      validate a sax.net.yaml env file`)
 }
 
 // --- Actions ---
@@ -630,7 +652,7 @@ func doKillSession(name string) {
 	os.Remove(ipc.PidPath(name))
 }
 
-func doCreateSession(name string, attach bool) {
+func doCreateSession(name string, attach bool, extraEnv ...string) {
 	if ipc.IsSessionAlive(name) {
 		if attach {
 			connectClient(name)
@@ -640,7 +662,7 @@ func doCreateSession(name string, attach bool) {
 		return
 	}
 
-	if err := launchDaemon(name, nil, ""); err != nil {
+	if err := launchDaemon(name, nil, "", append(lazyStartEnv(attach), extraEnv...)...); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -665,13 +687,13 @@ func doAttach(name string) {
 	connectClient(name)
 }
 
-func doExecSession(name string, command []string, attach bool, workDir string) {
+func doExecSession(name string, command []string, attach bool, workDir string, extraEnv ...string) {
 	if ipc.IsSessionAlive(name) {
 		fmt.Fprintf(os.Stderr, "sax: session %q already exists\n", name)
 		os.Exit(1)
 	}
 
-	if err := launchDaemon(name, command, workDir); err != nil {
+	if err := launchDaemon(name, command, workDir, append(lazyStartEnv(attach), extraEnv...)...); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -1198,7 +1220,7 @@ func doStatus(name string) {
 
 func doMCP() {
 	srv := mcp.NewServer("sax", version)
-	mcp.RegisterAllTools(srv, launchDaemon, waitForSession)
+	mcp.RegisterAllTools(srv, launchDaemon, waitForSession, mcpNetJoin)
 	srv.Run()
 }
 
@@ -1268,7 +1290,9 @@ func doServerMode(name string, command []string, workDir string) {
 	if n, ok := rc.HistoryLimit(); ok {
 		scrollback.SetDefaultCapacity(n)
 	}
-	pty.Configure(rc.Shell(), rc.EnvStrings())
+	// Sessions inside a vnet router add the shim settings to every pane.
+	pty.Configure(rc.Shell(), append(rc.EnvStrings(), vnet.PaneEnv(os.Getenv)...))
+	pty.SetWrapper(vnet.PaneWrapper(os.Getenv))
 
 	// "set default-dir" provides a fallback working directory when one was not
 	// supplied explicitly via --dir.
@@ -1277,8 +1301,13 @@ func doServerMode(name string, command []string, workDir string) {
 	}
 
 	srv := server.NewServer(name)
+	srv.LazyStart = os.Getenv(envLazyStart) != ""
+	os.Unsetenv(envLazyStart) // panes must not inherit it
 	srv.Saxrc = rc
 	srv.InitWorkDir = workDir
+	// In a vnet router on macOS, keep the shim across SIP binaries (sh -c,
+	// #!/usr/bin/env scripts) for the first command; the shim does the rest.
+	command = vnet.LaunderCommand(command, os.Getenv, exec.LookPath)
 	if len(command) > 0 {
 		srv.InitCmd = command[0]
 		if len(command) > 1 {
@@ -1404,7 +1433,10 @@ func checkForUpdateBackground() {
 
 // --- Helpers ---
 
-func launchDaemon(name string, command []string, workDir string) error {
+// launchDaemon starts the session daemon. extraEnv is added on top of the
+// caller's environment, minus any vnet settings inherited from a networked
+// pane (so a session never silently joins its parent's router).
+func launchDaemon(name string, command []string, workDir string, extraEnv ...string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("get executable: %w", err)
@@ -1424,7 +1456,8 @@ func launchDaemon(name string, command []string, workDir string) error {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	// Force true color in the daemon process so lipgloss renders ANSI colors
-	cmd.Env = append(os.Environ(), "COLORTERM=truecolor")
+	cmd.Env = append(vnet.StripEnv(os.Environ()), "COLORTERM=truecolor")
+	cmd.Env = append(cmd.Env, extraEnv...)
 
 	setProcAttr(cmd)
 
@@ -1432,13 +1465,13 @@ func launchDaemon(name string, command []string, workDir string) error {
 		return fmt.Errorf("start daemon: %w", err)
 	}
 
-	go cmd.Wait()
+	trackDaemon(name, cmd)
 	return nil
 }
 
 func waitForSession(name string) bool {
 	for i := 0; i < 50; i++ {
-		if ipc.IsSessionAlive(name) {
+		if ipc.IsSessionAlive(name) || daemonFinishedOK(name) {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)

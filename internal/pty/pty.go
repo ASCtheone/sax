@@ -32,6 +32,10 @@ func startProcess(cols, rows int, name string, args []string, workDir string) (*
 	if resolved, err := exec.LookPath(name); err == nil {
 		name = resolved
 	}
+	if len(wrapper) > 0 {
+		args = append(append(append([]string{}, wrapper[1:]...), name), args...)
+		name = wrapper[0]
+	}
 
 	p, err := gopty.New()
 	if err != nil {
@@ -54,6 +58,12 @@ func startProcess(cols, rows int, name string, args []string, workDir string) (*
 	if err := cmd.Start(); err != nil {
 		p.Close()
 		return nil, err
+	}
+	// The child has its own copy of the slave. Keeping ours open would stop
+	// master reads from ever failing on Linux, so a command's exit would go
+	// unnoticed and its session would never close.
+	if up, ok := p.(gopty.UnixPty); ok {
+		_ = up.Slave().Close()
 	}
 
 	return &Process{pty: p, cmd: cmd}, nil

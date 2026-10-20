@@ -12,6 +12,7 @@ import (
 var (
 	shellOverride string
 	extraEnv      []string
+	wrapper       []string
 )
 
 // Configure sets daemon-wide spawn defaults from .saxrc. shell is a shell name
@@ -20,6 +21,12 @@ var (
 func Configure(shell string, env []string) {
 	shellOverride = shell
 	extraEnv = append([]string(nil), env...)
+}
+
+// SetWrapper sets a command prefix for every spawned pane process (the vnet
+// supervisor on Linux); nil removes it. Call at startup like Configure.
+func SetWrapper(prefix []string) {
+	wrapper = append([]string(nil), prefix...)
 }
 
 // DetectShell returns the default shell for the current platform, honoring a
