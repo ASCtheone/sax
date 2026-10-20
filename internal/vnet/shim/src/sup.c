@@ -272,8 +272,9 @@ static void handle_bind(int lfd, const struct seccomp_notif *req, struct seccomp
     }
 
     in_port_t vport;
-    int err = 0;
-    switch (vn_plan_bind((struct sockaddr *)&sa, len, &vport, &err, port_free)) {
+    int err = 0, register_it = 1;
+    pid_t caller = tgid_of(req->pid);
+    switch (vn_plan_bind((struct sockaddr *)&sa, len, &vport, &err, port_free, caller, &register_it)) {
     case VN_PASS: break;
     case VN_FAIL: reply(resp, err); break;
     case VN_REWRITE: {
@@ -289,9 +290,10 @@ static void handle_bind(int lfd, const struct seccomp_notif *req, struct seccomp
         }
         in_port_t real = sa_port(&got);
         if (vport == 0) vport = real;
-        pid_t tgid = tgid_of(req->pid);
+        pid_t tgid = caller;
         struct stat st;
-        if (tgid <= 0 || fstat(dup, &st) != 0 || vn_register_port(vn_cfg.self, vport, real, tgid) != 0) {
+        if (tgid <= 0 || fstat(dup, &st) != 0 ||
+            (register_it && vn_register_port(vn_cfg.self, vport, real, tgid) != 0)) {
             reply(resp, EADDRNOTAVAIL);
             break;
         }

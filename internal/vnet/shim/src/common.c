@@ -115,9 +115,15 @@ static unsigned read_port_file(const char *path, int *pid_out) {
 }
 
 in_port_t vn_lookup_port(in_addr_t ip, in_port_t port) {
+    return vn_lookup_port_owner(ip, port, NULL);
+}
+
+in_port_t vn_lookup_port_owner(in_addr_t ip, in_port_t port, pid_t *owner) {
     char path[640];
     vn_port_path(ip, port, path, sizeof path);
-    unsigned real = read_port_file(path, NULL);
+    int pid = 0;
+    unsigned real = read_port_file(path, &pid);
+    if (owner) *owner = (pid_t)pid;
     if (!real) {
         unlink(path);  // absent or stale: either way it is gone now
         return 0;
@@ -210,7 +216,8 @@ vn_action vn_plan_connect(const struct sockaddr *addr, socklen_t len, in_port_t 
 }
 
 vn_action vn_plan_bind(const struct sockaddr *addr, socklen_t len, in_port_t *vport, int *err,
-                       int (*port_free)(in_port_t real)) {
+                       int (*port_free)(in_port_t real), pid_t caller, int *register_it) {
+    *register_it = 1;
     in_addr_t ip;
     int kind = vn_v4_of(addr, len, &ip, vport);
     if (kind < 0) return VN_PASS;
@@ -222,10 +229,14 @@ vn_action vn_plan_bind(const struct sockaddr *addr, socklen_t len, in_port_t *vp
         return VN_PASS;  // a real host interface: leave it alone
     }
     if (*vport != 0) {
-        in_port_t taken = vn_lookup_port(vn_cfg.self, *vport);
+        pid_t owner = 0;
+        in_port_t taken = vn_lookup_port_owner(vn_cfg.self, *vport, &owner);
         if (taken && !(port_free && port_free(taken))) {
-            *err = EADDRINUSE;
-            return VN_FAIL;
+            if (owner != caller) {
+                *err = EADDRINUSE;
+                return VN_FAIL;
+            }
+            *register_it = 0;  // the same app's second socket on this port
         }
     }
     return VN_REWRITE;

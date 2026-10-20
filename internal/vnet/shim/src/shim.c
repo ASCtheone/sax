@@ -33,6 +33,7 @@ typedef struct {
     pid_t owner;          // 0 = slot unused
     in_addr_t vip;        // network order
     in_port_t vport;      // network order
+    in_port_t real;       // network order; detects fd reuse after an unseen close
     int listening_entry;  // registered in ports/
 } vfd_t;
 
@@ -87,12 +88,31 @@ DECLARE_REAL(getsockname)
 DECLARE_REAL(close)
 DECLARE_REAL(getaddrinfo)
 
+static in_port_t port_of(const struct sockaddr_storage *sa) {
+    return sa->ss_family == AF_INET6 ? ((const struct sockaddr_in6 *)sa)->sin6_port
+                                     : ((const struct sockaddr_in *)sa)->sin_port;
+}
+
+// port_free reports whether 127.0.0.1:real (network order) can be bound,
+// i.e. a registry entry for it is stale.
+static int port_free(in_port_t real) {
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return 0;
+    int one = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    struct sockaddr_storage a;
+    socklen_t len = vn_real_addr(AF_INET, real, &a);
+    int ok = REAL(bind)(s, (struct sockaddr *)&a, len) == 0;
+    REAL(close)(s);
+    return ok;
+}
+
 HOOK_LINKAGE int HOOK(bind)(int fd, const struct sockaddr *addr, socklen_t len) {
     if (!on() || !addr || !is_stream(fd)) return REAL(bind)(fd, addr, len);
 
     in_port_t vport;
-    int err = 0;
-    switch (vn_plan_bind(addr, len, &vport, &err, NULL)) {
+    int err = 0, register_it = 1;
+    switch (vn_plan_bind(addr, len, &vport, &err, port_free, getpid(), &register_it)) {
     case VN_PASS: return REAL(bind)(fd, addr, len);
     case VN_FAIL: errno = err; return -1;
     case VN_REWRITE: break;
@@ -109,12 +129,12 @@ HOOK_LINKAGE int HOOK(bind)(int fd, const struct sockaddr *addr, socklen_t len) 
     struct sockaddr_storage got;
     socklen_t glen = sizeof got;
     if (REAL(getsockname)(fd, (struct sockaddr *)&got, &glen) != 0) return -1;
-    in_port_t real_port = got.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&got)->sin6_port
-                                                    : ((struct sockaddr_in *)&got)->sin_port;
+    in_port_t real_port = port_of(&got);
     if (vport == 0) vport = real_port;
 
-    if (vn_register_port(vn_cfg.self, vport, real_port, getpid()) != 0) return -1;
-    vfd_set(fd, (vfd_t){.owner = getpid(), .vip = vn_cfg.self, .vport = vport, .listening_entry = 1});
+    if (register_it && vn_register_port(vn_cfg.self, vport, real_port, getpid()) != 0) return -1;
+    vfd_set(fd, (vfd_t){.owner = getpid(), .vip = vn_cfg.self, .vport = vport, .real = real_port,
+                        .listening_entry = register_it});
     return 0;
 }
 EXPORT_HOOK(bind)
@@ -140,6 +160,10 @@ HOOK_LINKAGE int HOOK(getsockname)(int fd, struct sockaddr *addr, socklen_t *len
     if (rc != 0 || !on()) return rc;
     vfd_t v = vfd_get(fd);
     if (v.owner != getpid()) return rc;
+    struct sockaddr_storage cur;
+    memset(&cur, 0, sizeof cur);
+    memcpy(&cur, addr, *len < sizeof cur ? *len : sizeof cur);
+    if (port_of(&cur) != v.real) return rc;  // fd now names another socket
 
     struct sockaddr_storage virt;
     socklen_t vlen = vn_virtual_addr(addr->sa_family, v.vip, v.vport, &virt);

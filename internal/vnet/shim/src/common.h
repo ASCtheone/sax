@@ -42,6 +42,8 @@ VN_HIDDEN socklen_t vn_virtual_addr(int family, in_addr_t vip, in_port_t port, s
 // network order. lookup returns 0 when absent or the owner is gone.
 VN_HIDDEN void vn_port_path(in_addr_t ip, in_port_t port, char *out, size_t n);
 VN_HIDDEN in_port_t vn_lookup_port(in_addr_t ip, in_port_t port);
+// Like vn_lookup_port, also returning the registering process.
+VN_HIDDEN in_port_t vn_lookup_port_owner(in_addr_t ip, in_port_t port, pid_t *owner);
 VN_HIDDEN int vn_register_port(in_addr_t ip, in_port_t port, in_port_t real, pid_t owner);
 
 // Service map (svc file): rewrites vip:port to the target; 1 if rewritten.
@@ -59,11 +61,16 @@ typedef enum { VN_PASS, VN_REWRITE, VN_FAIL } vn_action;
 // *real to the loopback port to connect to; VN_FAIL sets *err.
 VN_HIDDEN vn_action vn_plan_connect(const struct sockaddr *addr, socklen_t len, in_port_t *real, int *err);
 
-// Decides what to do with bind(addr) on a stream socket. VN_REWRITE means
-// "bind 127.0.0.1:0 and register self:*vport" (*vport may be 0 = pick).
-// port_free(real) reports whether a registered real port is no longer
-// bound, so a stale entry from a closed socket does not block the port.
+// Decides what to do with bind(addr) on a stream socket by process caller.
+// VN_REWRITE means "bind 127.0.0.1:0" and, when *register_it is set,
+// "register self:*vport" (*vport may be 0 = pick).
+//
+// An existing entry for the port blocks the bind only while its real port
+// is still bound (port_free tells; closes are not always seen, e.g. libuv
+// on macOS) and it belongs to another process. The same process binding
+// the port again (IPv4 + IPv6 listeners) gets a socket without a second
+// registration: connections keep going to the first one.
 VN_HIDDEN vn_action vn_plan_bind(const struct sockaddr *addr, socklen_t len, in_port_t *vport, int *err,
-                                 int (*port_free)(in_port_t real));
+                                 int (*port_free)(in_port_t real), pid_t caller, int *register_it);
 
 #endif
