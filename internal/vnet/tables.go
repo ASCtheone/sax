@@ -88,12 +88,12 @@ func (r Router) Tables() (Tables, []string) {
 				httpSeen[rule.Host] = true
 				t.HTTP = append(t.HTTP, HTTPHost{Host: rule.Host, VIP: r.VIPs[rule.Host]})
 			}
-			if _, ok := r.resolve(rule.Target); !ok {
+			if _, ok := r.Resolve(rule.Target); !ok {
 				warnings = append(warnings, unresolvedWarning(rule))
 			}
 			continue
 		}
-		ip, ok := r.resolve(rule.Target)
+		ip, ok := r.Resolve(rule.Target)
 		if !ok {
 			warnings = append(warnings, unresolvedWarning(rule))
 			continue

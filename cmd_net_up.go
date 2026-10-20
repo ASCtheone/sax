@@ -122,7 +122,8 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string) error {
 		return err
 	}
 	printWarnings(w, warnings)
-	return nil
+	printHostURLs(w, r)
+	return ensureGateway(w, s, run)
 }
 
 func loadEnvFile(path string) (vnet.EnvFile, error) {
@@ -179,6 +180,11 @@ func applyPlan(s vnet.Store, plan vnet.Router) (vnet.Router, error) {
 		}
 		for _, raw := range plan.Rules {
 			if next, err = next.WithRule(raw); err != nil {
+				return cur, err
+			}
+		}
+		for _, raw := range plan.Publish {
+			if next, err = next.WithPublish(raw); err != nil {
 				return cur, err
 			}
 		}
@@ -290,4 +296,10 @@ func netEnvFor(saxName, netFlag, ip string) []string {
 	}
 	fmt.Printf("Session %q joins router %s as %s (%s)\n", saxName, m.Router, m.Host, m.IP)
 	return env
+}
+
+// mcpNetJoin adapts netJoin for the MCP sax_exec/sax_create_session tools.
+func mcpNetJoin(saxName, netFlag, ip string) ([]string, error) {
+	env, _, err := netJoin(vnetStore(), saxName, netFlag, ip)
+	return env, err
 }

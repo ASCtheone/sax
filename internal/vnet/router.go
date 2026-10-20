@@ -26,6 +26,7 @@ type Router struct {
 	VIPs     map[string]string `json:"vips"`     // rule hostname -> service VIP
 	Rules    []string          `json:"rules"`    // canonical rules, in match order
 	Owners   map[string]string `json:"owners"`   // session name -> sax session running it
+	Publish  []string          `json:"publish"`  // host port forwards, "15432 -> db:5432"
 }
 
 // NewRouter validates and builds an empty router.
@@ -38,6 +39,7 @@ func NewRouter(name, subnet, domain string) (Router, error) {
 		VIPs:     map[string]string{},
 		Rules:    []string{},
 		Owners:   map[string]string{},
+		Publish:  []string{},
 	}
 	if err := r.validateHeader(); err != nil {
 		return Router{}, err
@@ -87,6 +89,7 @@ func (r Router) clone() Router {
 		out.VIPs[k] = v
 	}
 	out.Rules = append([]string{}, r.Rules...)
+	out.Publish = append([]string{}, r.Publish...)
 	out.Owners = make(map[string]string, len(r.Owners))
 	for k, v := range r.Owners {
 		out.Owners[k] = v
@@ -257,8 +260,8 @@ func hostInUse(rules []Rule, host string) bool {
 	return false
 }
 
-// resolve turns a rule target into a virtual address, if it is known.
-func (r Router) resolve(ep Endpoint) (string, bool) {
+// Resolve turns a rule target into a virtual address, if it is known.
+func (r Router) Resolve(ep Endpoint) (string, bool) {
 	if addr, err := netip.ParseAddr(ep.Host); err == nil {
 		return addr.String(), usableHost(r.prefix(), addr)
 	}

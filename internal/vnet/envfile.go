@@ -35,6 +35,7 @@ type EnvFile struct {
 	Domain   string                 `yaml:"domain"`
 	Sessions map[string]SessionSpec `yaml:"sessions"`
 	Routes   []string               `yaml:"routes"`
+	Publish  []string               `yaml:"publish"`
 }
 
 // ParseEnvFile decodes an env file strictly: unknown keys are errors, so a
@@ -130,8 +131,17 @@ func (e EnvFile) Plan() (Router, []string, error) {
 
 	rules, _ := r.ParsedRules()
 	for _, rule := range rules {
-		if _, ok := r.resolve(rule.Target); !ok {
+		if _, ok := r.Resolve(rule.Target); !ok {
 			return Router{}, nil, fmt.Errorf("route %q: unknown target %q (not a session in this file)", rule, rule.Target.Host)
+		}
+	}
+	for _, raw := range e.Publish {
+		if r, err = r.WithPublish(raw); err != nil {
+			return Router{}, nil, err
+		}
+		p, _ := ParsePublish(raw)
+		if _, ok := r.Resolve(p.Target); !ok {
+			return Router{}, nil, fmt.Errorf("publish %q: unknown target %q (not a session in this file)", p, p.Target.Host)
 		}
 	}
 

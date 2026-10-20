@@ -184,14 +184,7 @@ func (s *Server) ensureSession(w, h int) (*ManagedSession, error) {
 	if ms := s.sessions.Get(s.name); ms != nil {
 		return ms, nil
 	}
-	ms, err := s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir)
-	if err != nil {
-		return nil, err
-	}
-	ms.onPaneExit = func(paneID string) {
-		s.handlePaneExit(paneID)
-	}
-	return ms, nil
+	return s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir, s.handlePaneExit)
 }
 
 // handleQuery responds to a session info query and closes the connection.
@@ -239,19 +232,28 @@ func (s *Server) handleQueryTail(conn net.Conn, ms *ManagedSession, args string)
 
 	content := ""
 	if ms != nil {
-		pane := ms.Session.ActivePane()
-		if pane != nil {
-			rendered := pane.Render()
-			lines := strings.Split(rendered, "\n")
-			start := len(lines) - n
-			if start < 0 {
-				start = 0
-			}
-			content = strings.Join(lines[start:], "\n")
+		if pane := ms.Session.ActivePane(); pane != nil {
+			content = tailLines(pane.Render(), n)
 		}
 	}
 
 	_ = WriteMsg(conn, MsgQueryReply, &map[string]string{"tail": content})
+}
+
+// tailLines returns the last n lines of a rendered pane, ignoring the blank
+// rows below the output (a fresh 40-row pane is mostly empty, and counting
+// those rows would hide short output from `sax --tail` and sax_tail).
+func tailLines(rendered string, n int) string {
+	lines := strings.Split(rendered, "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	start := end - n
+	if start < 0 {
+		start = 0
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // handleQuerySend writes text into the active pane's PTY.

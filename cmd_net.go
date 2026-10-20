@@ -21,15 +21,21 @@ const netUsage = `usage: sax net                                 list routers
        sax net check [-f sax.net.yaml]           validate an env file
        sax net up [-f sax.net.yaml]              start the env file's sessions
        sax net down <router> | -f <file>         stop a router's sessions
+       sax net publish <router> <host-port> <target>
+                                                 forward 127.0.0.1:<host-port> into the router
+       sax net unpublish <router> <host-port>
+       sax net gateway [--port N]                run the HTTP router (normally auto-started)
        sax -x <name> --net <router>[:<host>] [--ip A] <cmd...>
                                                  run a session inside a router
+
+from the host: http://<host>.<router>.localhost:7480 (HTTP routes) and published ports
 
 rules: bob.lan/api/* -> api:3200   HTTP route, path forwarded unchanged
        db.lan:5432   -> db:5432    TCP mapping (no proxy)
        bob.lan       -> api:3200   TCP mapping on port 80`
 
 // netFlagsWithValue are the sax net flags that consume the next argument.
-var netFlagsWithValue = map[string]bool{"--subnet": true, "--domain": true, "-f": true}
+var netFlagsWithValue = map[string]bool{"--subnet": true, "--domain": true, "-f": true, "--port": true, "--addr": true}
 
 func vnetRoot() string { return filepath.Join(filepath.Dir(ipc.SessionsDir()), "vnet") }
 
@@ -57,11 +63,19 @@ func doNet(args []string) {
 	case "inspect", "show":
 		err = netInspect(os.Stdout, vnetStore(), pos)
 	case "map":
-		err = netMap(os.Stdout, vnetStore(), pos)
+		if err = netMap(os.Stdout, vnetStore(), pos); err == nil {
+			err = ensureGateway(os.Stdout, vnetStore(), daemonRunner{})
+		}
 	case "unmap":
 		err = netUnmap(os.Stdout, vnetStore(), pos)
 	case "check":
 		err = netCheck(os.Stdout, flagValue(args, "-f"))
+	case "publish":
+		err = netPublish(os.Stdout, vnetStore(), daemonRunner{}, pos)
+	case "unpublish":
+		err = netUnpublish(os.Stdout, vnetStore(), pos)
+	case "gateway":
+		err = doNetGateway(args)
 	case "up":
 		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"))
 	case "down":
@@ -173,6 +187,7 @@ func netInspect(w io.Writer, s vnet.Store, pos []string) error {
 	}
 	_, warnings := r.Tables()
 	printRouter(w, r, warnings)
+	printHostURLs(w, r)
 	fmt.Fprintf(w, "\nstate: %s\n", s.RouterDir(r.Name))
 	return nil
 }

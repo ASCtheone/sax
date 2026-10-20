@@ -1220,10 +1220,7 @@ func doStatus(name string) {
 
 func doMCP() {
 	srv := mcp.NewServer("sax", version)
-	launch := func(name string, command []string, workDir string) error {
-		return launchDaemon(name, command, workDir)
-	}
-	mcp.RegisterAllTools(srv, launch, waitForSession)
+	mcp.RegisterAllTools(srv, launchDaemon, waitForSession, mcpNetJoin)
 	srv.Run()
 }
 
