@@ -64,9 +64,11 @@ func (sm *SessionManager) ConfigureHooks(newPaneHooks, runCmds []string) {
 // Create creates a new named session. If cmdName is non-empty, the initial
 // pane runs that command instead of the default shell.
 // Create starts a session. onPaneExit is installed before any pane reader
-// runs, so a command that exits immediately is never missed.
+// runs, so a command that exits immediately is never missed. extraTabs are
+// added (named, running their commands) before the readers start too, so
+// nothing reads the session while it is being built.
 func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs []string, workDir string,
-	onPaneExit func(paneID string)) (*ManagedSession, error) {
+	onPaneExit func(paneID string), extraTabs ...TabSpec) (*ManagedSession, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -84,6 +86,15 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
+	}
+	for _, spec := range extraTabs {
+		if len(spec.Cmd) == 0 {
+			continue
+		}
+		if _, err := sess.AddCommandTab(spec.Name, spec.Cmd[0], spec.Cmd[1:], spec.Dir); err != nil {
+			sess.Close()
+			return nil, fmt.Errorf("create tab %s: %w", spec.Name, err)
+		}
 	}
 
 	alertCh := make(chan monitor.Alert, 16)

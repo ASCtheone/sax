@@ -9,6 +9,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/vnet"
 	"github.com/asc/sax/internal/vnet/shim"
 )
@@ -21,6 +22,10 @@ const shimDirName = "_lib"
 type sessionRunner interface {
 	Alive(name string) bool
 	Launch(name string, command []string, workDir string, env []string) error
+	// LaunchTabs starts a session with one named tab per command.
+	LaunchTabs(name string, tabs []server.TabSpec) error
+	// Attach opens the session in this terminal until the user detaches.
+	Attach(name string)
 	Kill(name string)
 }
 
@@ -36,7 +41,15 @@ func (daemonRunner) Launch(name string, command []string, workDir string, env []
 	}
 	return nil
 }
-func (daemonRunner) Kill(name string) { killSessionQuiet(name) }
+func (r daemonRunner) LaunchTabs(name string, tabs []server.TabSpec) error {
+	env, err := initTabsEnv(tabs)
+	if err != nil {
+		return err
+	}
+	return r.Launch(name, nil, "", []string{env})
+}
+func (daemonRunner) Attach(name string) { connectClient(name) }
+func (daemonRunner) Kill(name string)   { killSessionQuiet(name) }
 
 // installShim is swapped in tests to avoid compiling the C shim.
 var installShim = func() (shim.Paths, error) {
@@ -102,7 +115,7 @@ func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, 
 // netUp brings up the environment described by an env file: it creates or
 // updates the router (the file is the source of truth for domain and routes)
 // and starts every session that is not already running.
-func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string) error {
+func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string, attach bool) error {
 	e, err := loadEnvFile(path)
 	if err != nil {
 		return err
@@ -142,7 +155,17 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string) error {
 	}
 	printWarnings(w, warnings)
 	printHostURLs(w, s, r)
-	return ensureGateway(w, s, run)
+	if err := ensureGateway(w, s, run); err != nil {
+		return err
+	}
+	view, err := startView(w, s, run, r.Name)
+	if err != nil {
+		return err
+	}
+	if attach && view != "" {
+		run.Attach(view)
+	}
+	return nil
 }
 
 func loadEnvFile(path string) (vnet.EnvFile, error) {
@@ -180,6 +203,7 @@ func applyPlan(s vnet.Store, plan vnet.Router) (vnet.Router, error) {
 		if err != nil {
 			return cur, err
 		}
+		next = next.WithView(cur.View)
 		// Hand-joined sessions keep their addresses; planned ones are placed
 		// after them so a clash is reported instead of silently moved.
 		for _, host := range cur.SortedSessions() {
@@ -245,6 +269,9 @@ func netDown(w io.Writer, s vnet.Store, run sessionRunner, routerName string) er
 	}
 	r, err := s.Get(routerName)
 	if err != nil {
+		return err
+	}
+	if err := stopView(w, s, run, r); err != nil {
 		return err
 	}
 	hosts := r.SortedSessions()

@@ -63,3 +63,12 @@ func TestPrefixLiteralBytes(t *testing.T) {
 		})
 	}
 }
+
+// Screen/tmux habit: Ctrl+A then Ctrl+D (without releasing Ctrl) detaches.
+func TestBuildKeymapScreenStyleDetach(t *testing.T) {
+	rc := saxrc.Parse("set prefix C-a\nbind C-d detach\n", "")
+	prefix, km := buildKeymap(rc)
+	if prefix != "ctrl+a" || km["ctrl+d"] != "detach" || km["d"] != "detach" {
+		t.Errorf("prefix = %q, ctrl+d = %q, d = %q", prefix, km["ctrl+d"], km["d"])
+	}
+}

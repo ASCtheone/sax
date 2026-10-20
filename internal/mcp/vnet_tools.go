@@ -77,9 +77,9 @@ var netTools = []netTool{
 		props: map[string]interface{}{"file": stringProp("Path to the env file (default ./sax.net.yaml)")},
 		args: func(p map[string]interface{}) []string {
 			if f := str(p, "file"); f != "" {
-				return []string{"up", "-f", f}
+				return []string{"up", "-d", "-f", f}
 			}
-			return []string{"up"}
+			return []string{"up", "-d"}
 		},
 	},
 	{

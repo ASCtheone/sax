@@ -19,7 +19,8 @@ const netUsage = `usage: sax net                                 list routers
        sax net map <router> <pattern> <target>   append a rule (first match wins)
        sax net unmap <router> <pattern>
        sax net check [-f sax.net.yaml]           validate an env file
-       sax net up [-f sax.net.yaml]              start the env file's sessions
+       sax net up [-f sax.net.yaml] [-d]         start the apps and open a view with a tab per app
+                                                 (-d: stay detached; sax -a <router> later)
        sax net down <router> | -f <file>         stop a router's sessions
        sax net publish <router> <host-port> <target>
                                                  forward 127.0.0.1:<host-port> into the router
@@ -83,7 +84,7 @@ func doNet(args []string) {
 	case "unregister":
 		err = netUnregister(os.Stdout, vnetStore(), pos)
 	case "up":
-		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"))
+		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"), wantsAttach(args))
 	case "down":
 		var router string
 		if router, err = routerFromArgs(pos, flagValue(args, "-f")); err == nil {

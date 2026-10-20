@@ -219,11 +219,13 @@ publish:
 ```
 
 ```bash
-sax net up -f v1.yaml        # create/update the router, start its sessions (idempotent)
-sax net up -f v2.yaml        # same app, another version, same ports
+sax net up -f v1.yaml        # start v1's apps and open a view: one tab per app
+                             #   (Ctrl+S d detaches; everything keeps running)
+sax net up -f v2.yaml -d     # same app, another version, same ports; -d stays detached
+sax -a v2                    # open v2's view later
 sax net ls                   # routers
 sax net inspect v1           # sessions, IPs, rules, host URLs
-sax net down v1              # stop v1's sessions
+sax net down v1              # stop v1's apps and its view
 sax net check -f v1.yaml     # validate (e.g. warns about rules that can never match)
 
 sax net create lab --subnet 10.20.0.0/24 --domain lan

@@ -22,11 +22,12 @@ type Router struct {
 	Name     string            `json:"name"`
 	Subnet   string            `json:"subnet"`
 	Domain   string            `json:"domain,omitempty"`
-	Sessions map[string]string `json:"sessions"` // session name -> virtual IP
-	VIPs     map[string]string `json:"vips"`     // rule hostname -> service VIP
-	Rules    []string          `json:"rules"`    // canonical rules, in match order
-	Owners   map[string]string `json:"owners"`   // session name -> sax session running it
-	Publish  []string          `json:"publish"`  // host port forwards, "15432 -> db:5432"
+	Sessions map[string]string `json:"sessions"`       // session name -> virtual IP
+	VIPs     map[string]string `json:"vips"`           // rule hostname -> service VIP
+	Rules    []string          `json:"rules"`          // canonical rules, in match order
+	Owners   map[string]string `json:"owners"`         // session name -> sax session running it
+	Publish  []string          `json:"publish"`        // host port forwards, "15432 -> db:5432"
+	View     string            `json:"view,omitempty"` // sax session showing one tab per app
 }
 
 // NewRouter validates and builds an empty router.
@@ -177,6 +178,14 @@ func (r Router) WithoutSession(name string) Router {
 	out := r.clone()
 	delete(out.Sessions, name)
 	delete(out.Owners, name)
+	return out
+}
+
+// WithView records the sax session that shows this router's apps as tabs
+// ("" when there is none).
+func (r Router) WithView(session string) Router {
+	out := r.clone()
+	out.View = session
 	return out
 }
 
