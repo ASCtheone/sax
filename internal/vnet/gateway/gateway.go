@@ -1,6 +1,6 @@
 // Package gateway serves vnet traffic that needs a process in the path: HTTP
-// path routes (first match wins), host access through *.localhost, and host
-// port publishes. One gateway serves every router; it runs as the sax session
+// path routes (first match wins), host access through *.localhost, host
+// port publishes, and a per-router DNS stub for supervised Linux sessions. One gateway serves every router; it runs as the sax session
 // "vnet-gateway" and reloads router state from the store every second, so
 // `sax net map` and `sax net up` take effect without a restart.
 //
@@ -41,6 +41,9 @@ type Config struct {
 	HostAddr string        // host-facing HTTP listener; DefaultHostAddr if empty
 	Reload   time.Duration // store polling interval; 1s if zero
 	Logf     func(format string, args ...any)
+	// DNSUpstream and DNSSearch default to the host's /etc/resolv.conf.
+	DNSUpstream []string
+	DNSSearch   []string
 }
 
 // Gateway is the running HTTP router and port forwarder.
@@ -50,7 +53,8 @@ type Gateway struct {
 	hostAddr atomic.Value // string, set once the host listener is up
 
 	mu        sync.Mutex
-	listeners map[string]*routerListener // router name -> in-router listener
+	listeners map[string]*routerListener // router name -> in-router HTTP listener
+	dns       map[string]*dnsServer      // router name -> DNS stub
 	publishes map[uint16]*publisher      // host port -> forwarder
 }
 
@@ -72,7 +76,15 @@ func New(cfg Config) *Gateway {
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	g := &Gateway{cfg: cfg, listeners: map[string]*routerListener{}, publishes: map[uint16]*publisher{}}
+	if cfg.DNSUpstream == nil && cfg.DNSSearch == nil {
+		cfg.DNSUpstream, cfg.DNSSearch = hostResolvers(resolvConf)
+	}
+	g := &Gateway{
+		cfg:       cfg,
+		listeners: map[string]*routerListener{},
+		dns:       map[string]*dnsServer{},
+		publishes: map[uint16]*publisher{},
+	}
 	empty := map[string]vnet.Router{}
 	g.routers.Store(&empty)
 	return g
@@ -131,6 +143,7 @@ func (g *Gateway) Sync() error {
 	defer g.mu.Unlock()
 	for _, r := range list {
 		tables, _ := r.Tables()
+		g.syncDNS(r, tables.Names)
 		if len(tables.HTTP) == 0 {
 			g.closeRouter(r.Name)
 			continue
@@ -142,6 +155,11 @@ func (g *Gateway) Sync() error {
 	for name := range g.listeners {
 		if _, ok := routers[name]; !ok {
 			g.closeRouter(name)
+		}
+	}
+	for name := range g.dns {
+		if _, ok := routers[name]; !ok {
+			g.closeDNS(name)
 		}
 	}
 	g.syncPublishes(list)
@@ -206,6 +224,9 @@ func (g *Gateway) shutdown() {
 	defer g.mu.Unlock()
 	for name := range g.listeners {
 		g.closeRouter(name)
+	}
+	for name := range g.dns {
+		g.closeDNS(name)
 	}
 	for port, p := range g.publishes {
 		p.close()

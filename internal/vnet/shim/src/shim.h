@@ -22,7 +22,6 @@
 #define DECLARE_REAL(name)
 #define EXPORT_HOOK(name) DYLD_INTERPOSE(sax_##name, name)
 #define HOOK_LINKAGE static
-#define SET_SOCKADDR_LEN(s, field) ((s)->field = sizeof *(s))
 
 #else
 
@@ -38,7 +37,6 @@
     }
 #define EXPORT_HOOK(name)
 #define HOOK_LINKAGE __attribute__((visibility("default")))
-#define SET_SOCKADDR_LEN(s, field) ((void)0)
 
 #endif
 

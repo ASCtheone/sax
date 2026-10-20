@@ -107,3 +107,24 @@ func TestNetUp_PublishAndGateway(t *testing.T) {
 		t.Errorf("up should print host URLs:\n%s", out.String())
 	}
 }
+
+func TestNeedsGateway_LinuxSessionsNeedDNS(t *testing.T) {
+	s := vnet.NewStore(t.TempDir())
+	r, _ := vnet.NewRouter("v1", "10.12.12.0/24", "")
+	_ = s.Create(r)
+	_, _ = s.Update("v1", func(r vnet.Router) (vnet.Router, error) {
+		r, _, err := r.WithSession("api", "")
+		return r, err
+	})
+	orig := hostOS
+	defer func() { hostOS = orig }()
+
+	hostOS = "darwin"
+	if needsGateway(s) {
+		t.Error("macOS sessions resolve names in the shim; no gateway needed")
+	}
+	hostOS = "linux"
+	if !needsGateway(s) {
+		t.Error("Linux sessions need the gateway's DNS stub")
+	}
+}

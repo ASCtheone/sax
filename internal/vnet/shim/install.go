@@ -19,10 +19,11 @@ import (
 	"strings"
 )
 
-//go:embed src/shim.c src/exec.c src/shim.h src/reinject.cjs src/zshenv
+//go:embed src/common.c src/common.h src/shim.c src/exec.c src/shim.h src/sup.c src/reinject.cjs src/zshenv
 var sources embed.FS
 
 const (
+	supName       = "sax-vnet-sup"
 	reinjectName  = "reinject.cjs"
 	zdotdirName   = "zdotdir"
 	versionLength = 12
@@ -37,14 +38,15 @@ type platform struct {
 	baseFlags  []string   // compiler flags for a shared library
 	archSets   [][]string // -arch sets to try in order (nil: native only)
 	ldFlags    []string
-	sipHelpers bool   // Node reinject + zsh wrapper (macOS SIP workarounds)
-	ccHint     string // how to get a C compiler
+	supSources []string // seccomp supervisor executable (Linux); nil: none
+	sipHelpers bool     // Node reinject + zsh wrapper (macOS SIP workarounds)
+	ccHint     string   // how to get a C compiler
 }
 
 var platforms = map[string]platform{
 	"darwin": {
 		libName:   "libsaxvnet.dylib",
-		sources:   []string{"shim.c", "exec.c"},
+		sources:   []string{"common.c", "shim.c", "exec.c"},
 		baseFlags: []string{"-dynamiclib", "-O2"},
 		// Native arm64, Apple's arm64e binaries and Rosetta; then host only.
 		archSets:   [][]string{{"arm64", "arm64e", "x86_64"}, {hostArch()}},
@@ -52,12 +54,13 @@ var platforms = map[string]platform{
 		ccHint:     "run: xcode-select --install",
 	},
 	"linux": {
-		libName:   "libsaxvnet.so",
-		sources:   []string{"shim.c"},
-		baseFlags: []string{"-shared", "-fPIC", "-O2"},
-		archSets:  [][]string{nil},
-		ldFlags:   []string{"-ldl"},
-		ccHint:    "install gcc, e.g. apt install build-essential",
+		libName:    "libsaxvnet.so",
+		sources:    []string{"common.c", "shim.c"},
+		baseFlags:  []string{"-shared", "-fPIC", "-O2"},
+		archSets:   [][]string{nil},
+		ldFlags:    []string{"-ldl"},
+		supSources: []string{"common.c", "sup.c"},
+		ccHint:     "install gcc, e.g. apt install build-essential",
 	},
 }
 
@@ -78,6 +81,9 @@ type Paths struct {
 	Lib      string // the interpose dylib
 	Reinject string // Node --require fallback
 	ZDotDir  string // ZDOTDIR holding the wrapper .zshenv
+	// Supervisor runs pane commands under seccomp (Linux), so binaries that
+	// skip libc get virtual addresses too.
+	Supervisor string
 }
 
 func pathsIn(dir string, p platform) Paths {
@@ -85,6 +91,9 @@ func pathsIn(dir string, p platform) Paths {
 	if p.sipHelpers {
 		paths.Reinject = filepath.Join(dir, reinjectName)
 		paths.ZDotDir = filepath.Join(dir, zdotdirName)
+	}
+	if p.supSources != nil {
+		paths.Supervisor = filepath.Join(dir, supName)
 	}
 	return paths
 }
@@ -172,12 +181,18 @@ func build(dir string, plat platform) error {
 			return err
 		}
 	}
-	return compile(srcDir, filepath.Join(dir, plat.libName), plat)
+	if err := compile(srcDir, filepath.Join(dir, plat.libName), plat, plat.sources, plat.baseFlags); err != nil {
+		return err
+	}
+	if plat.supSources != nil {
+		return compile(srcDir, filepath.Join(dir, supName), plat, plat.supSources, []string{"-O2"})
+	}
+	return nil
 }
 
 // compile builds the library, trying each architecture set in turn (on
 // macOS: fat first, then the host architecture alone).
-func compile(srcDir, out string, plat platform) error {
+func compile(srcDir, out string, plat platform, sources, flags []string) error {
 	cc := os.Getenv("CC")
 	if cc == "" {
 		cc = "cc"
@@ -186,13 +201,13 @@ func compile(srcDir, out string, plat platform) error {
 		return fmt.Errorf("vnet needs a C compiler to build its shim (%s): %w", plat.ccHint, err)
 	}
 
-	srcs := make([]string, len(plat.sources))
-	for i, s := range plat.sources {
+	srcs := make([]string, len(sources))
+	for i, s := range sources {
 		srcs[i] = filepath.Join(srcDir, s)
 	}
 	var lastErr error
 	for _, archs := range plat.archSets {
-		args := append(append([]string{}, plat.baseFlags...), "-o", out)
+		args := append(append([]string{}, flags...), "-o", out)
 		for _, a := range archs {
 			args = append(args, "-arch", a)
 		}
@@ -223,4 +238,14 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	return nil
+}
+
+// SupervisionAvailable reports whether the seccomp supervisor can work on
+// this machine (it can be blocked by Yama ptrace_scope >= 2 or a container
+// seccomp profile). Always false where there is no supervisor.
+func SupervisionAvailable(p Paths) bool {
+	if p.Supervisor == "" {
+		return false
+	}
+	return exec.Command(p.Supervisor, "--check").Run() == nil
 }

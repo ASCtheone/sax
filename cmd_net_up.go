@@ -43,6 +43,19 @@ var installShim = func() (shim.Paths, error) {
 	return shim.Install(filepath.Join(vnetRoot(), shimDirName))
 }
 
+// supervisionAvailable is swapped in tests.
+var supervisionAvailable = shim.SupervisionAvailable
+
+// supervisionWarning explains, on Linux, when binaries that skip libc will
+// not get virtual addresses; "" when everything is supported.
+func supervisionWarning(p shim.Paths) string {
+	if p.Supervisor == "" || supervisionAvailable(p) {
+		return ""
+	}
+	return "seccomp supervision is not permitted here (Yama ptrace_scope >= 2 or a container seccomp " +
+		"profile); using LD_PRELOAD, so Go and other static binaries will not get virtual addresses"
+}
+
 // netJoin reserves an address in a router for a sax session started with
 // --net <router>[:<name>] and returns the env for its daemon.
 func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, error) {
@@ -58,6 +71,9 @@ func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, 
 	paths, err := installShim()
 	if err != nil {
 		return nil, vnet.Member{}, err
+	}
+	if w := supervisionWarning(paths); w != "" {
+		fmt.Fprintf(os.Stderr, "sax: warning: %s\n", w)
 	}
 
 	var assigned string
@@ -98,6 +114,9 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string) error {
 	paths, err := installShim()
 	if err != nil {
 		return err
+	}
+	if w := supervisionWarning(paths); w != "" {
+		warnings = append(warnings, w)
 	}
 	r, err := applyPlan(s, plan)
 	if err != nil {
@@ -289,11 +308,17 @@ func netEnvFor(saxName, netFlag, ip string) []string {
 		os.Exit(1)
 	}
 	fmt.Printf("Session %q joins router %s as %s (%s)\n", saxName, m.Router, m.Host, m.IP)
+	if err := ensureGateway(os.Stdout, vnetStore(), daemonRunner{}); err != nil {
+		fmt.Fprintf(os.Stderr, "sax: --net: %v\n", err)
+	}
 	return env
 }
 
 // mcpNetJoin adapts netJoin for the MCP sax_exec/sax_create_session tools.
 func mcpNetJoin(saxName, netFlag, ip string) ([]string, error) {
 	env, _, err := netJoin(vnetStore(), saxName, netFlag, ip)
-	return env, err
+	if err != nil {
+		return nil, err
+	}
+	return env, ensureGateway(io.Discard, vnetStore(), daemonRunner{})
 }

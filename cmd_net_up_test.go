@@ -234,3 +234,21 @@ func TestNetJoin(t *testing.T) {
 		t.Error("underscore session name cannot become a host name")
 	}
 }
+
+func TestSupervisionWarning(t *testing.T) {
+	orig := supervisionAvailable
+	defer func() { supervisionAvailable = orig }()
+
+	withSup := shim.Paths{Lib: "/s/l.so", Supervisor: "/s/sax-vnet-sup"}
+	supervisionAvailable = func(shim.Paths) bool { return true }
+	if w := supervisionWarning(withSup); w != "" {
+		t.Errorf("supported: %q", w)
+	}
+	supervisionAvailable = func(shim.Paths) bool { return false }
+	if w := supervisionWarning(withSup); !strings.Contains(w, "LD_PRELOAD") {
+		t.Errorf("blocked: %q", w)
+	}
+	if w := supervisionWarning(shim.Paths{Lib: "/s/l.dylib"}); w != "" {
+		t.Errorf("macOS (no supervisor): %q", w)
+	}
+}

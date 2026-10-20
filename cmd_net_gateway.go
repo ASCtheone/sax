@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -96,7 +97,12 @@ func portSuffix(addr string) string {
 	return ":" + port
 }
 
-// needsGateway reports whether any router has HTTP routes or publishes.
+// hostOS is runtime.GOOS; tests override it.
+var hostOS = runtime.GOOS
+
+// needsGateway reports whether any router has HTTP routes or publishes, or
+// (on Linux) sessions, whose Go/static programs resolve names through the
+// gateway's DNS stub.
 func needsGateway(s vnet.Store) bool {
 	routers, err := s.List()
 	if err != nil {
@@ -104,7 +110,7 @@ func needsGateway(s vnet.Store) bool {
 	}
 	for _, r := range routers {
 		tables, _ := r.Tables()
-		if len(tables.HTTP) > 0 || len(r.Publish) > 0 {
+		if len(tables.HTTP) > 0 || len(r.Publish) > 0 || (hostOS == "linux" && len(r.Sessions) > 0) {
 			return true
 		}
 	}

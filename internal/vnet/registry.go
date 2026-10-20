@@ -44,3 +44,21 @@ func UnregisterPort(dir, ip string, port int) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// dnsFile publishes the gateway's DNS stub port for a router ("<port> <pid>"),
+// read by the Linux supervisor to redirect DNS queries.
+const dnsFile = "dns"
+
+// RegisterDNS records the DNS stub serving a router dir.
+func RegisterDNS(dir string, port, pid int) error {
+	return writeAtomic(filepath.Join(dir, dnsFile), []byte(fmt.Sprintf("%d %d\n", port, pid)))
+}
+
+// UnregisterDNS removes a router's DNS stub entry.
+func UnregisterDNS(dir string) { _ = os.Remove(filepath.Join(dir, dnsFile)) }
+
+// DNSRegistered reports whether a router dir has a DNS stub entry.
+func DNSRegistered(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, dnsFile))
+	return err == nil
+}

@@ -21,6 +21,7 @@ const (
 	EnvReinject    = "SAX_VNET_REINJECT"
 	EnvZWrapper    = "SAX_VNET_ZWRAPPER"
 	EnvOrigZDotDir = "SAX_VNET_ZDOTDIR"
+	EnvSupervisor  = "SAX_VNET_SUPERVISOR"
 
 	envDyld          = "DYLD_INSERT_LIBRARIES"
 	envLDPreload     = "LD_PRELOAD"
@@ -96,7 +97,21 @@ func DaemonEnv(m Member, p shim.Paths) []string {
 	if p.ZDotDir != "" {
 		env = append(env, EnvZWrapper+"="+p.ZDotDir)
 	}
+	if p.Supervisor != "" {
+		env = append(env, EnvSupervisor+"="+p.Supervisor)
+	}
 	return env
+}
+
+// PaneWrapper is the command prefix for every pane of a networked daemon on
+// Linux: the seccomp supervisor, which gives binaries that skip libc (Go,
+// static) their virtual addresses. Nil elsewhere.
+func PaneWrapper(getenv func(string) string) []string {
+	sup := getenv(EnvSupervisor)
+	if sup == "" || goos != "linux" {
+		return nil
+	}
+	return []string{sup}
 }
 
 // PaneEnv returns the extra environment for a pane spawned by a networked
@@ -113,6 +128,9 @@ func PaneEnv(getenv func(string) string) []string {
 	lib := getenv(EnvShim)
 	if lib == "" {
 		return nil
+	}
+	if PaneWrapper(getenv) != nil {
+		return nil // the supervisor sets LD_PRELOAD itself if it has to fall back
 	}
 	preload := lib
 	if cur := getenv(preloadVar()); cur != "" && !strings.Contains(cur, lib) {

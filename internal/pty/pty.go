@@ -32,6 +32,10 @@ func startProcess(cols, rows int, name string, args []string, workDir string) (*
 	if resolved, err := exec.LookPath(name); err == nil {
 		name = resolved
 	}
+	if len(wrapper) > 0 {
+		args = append(append(append([]string{}, wrapper[1:]...), name), args...)
+		name = wrapper[0]
+	}
 
 	p, err := gopty.New()
 	if err != nil {

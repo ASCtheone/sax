@@ -241,3 +241,29 @@ func TestPaneEnv_Linux(t *testing.T) {
 		t.Errorf("stripped LD_PRELOAD = %q", got["LD_PRELOAD"])
 	}
 }
+
+func TestSupervisorEnvAndWrapper(t *testing.T) {
+	withGOOS(t, "linux")
+	p := shim.Paths{Dir: "/s", Lib: "/s/libsaxvnet.so", Supervisor: "/s/sax-vnet-sup"}
+	daemon := envMap(DaemonEnv(Member{Router: "v1", Host: "api", IP: "10.0.0.2", Subnet: "10.0.0.0/24", Dir: "/d"}, p))
+	if daemon[EnvSupervisor] != "/s/sax-vnet-sup" {
+		t.Fatalf("daemon env = %v", daemon)
+	}
+	getenv := func(k string) string { return daemon[k] }
+
+	if w := PaneWrapper(getenv); len(w) != 1 || w[0] != "/s/sax-vnet-sup" {
+		t.Errorf("PaneWrapper = %v", w)
+	}
+	if _, ok := envMap(PaneEnv(getenv))["LD_PRELOAD"]; ok {
+		t.Error("with a supervisor, LD_PRELOAD is the supervisor's fallback, not the pane's default")
+	}
+
+	// macOS and sessions outside a router get no wrapper.
+	if w := PaneWrapper(func(string) string { return "" }); w != nil {
+		t.Errorf("no router: %v", w)
+	}
+	withGOOS(t, "darwin")
+	if w := PaneWrapper(getenv); w != nil {
+		t.Errorf("darwin: %v", w)
+	}
+}

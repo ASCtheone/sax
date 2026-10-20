@@ -237,15 +237,25 @@ Inside a router, an app requesting `http://bob.lan/api/users` hits `api`; from t
 automatically; `sax net gateway --port 80` drops the port). The MCP server
 exposes the same through `sax_net_*` tools and a `net` parameter on `sax_exec`.
 
-How it works: sessions load a small interpose library (`DYLD_INSERT_LIBRARIES`
-on macOS, `LD_PRELOAD` on Linux) that maps virtual addresses to real loopback
-sockets, so it needs neither root nor network namespaces. The library is
-compiled once with the system C compiler (`xcode-select --install` /
-`apt install build-essential` if missing).
+How it works: virtual addresses are mapped to real loopback sockets, so it
+needs neither root nor network namespaces.
 
-Limits: TCP only. macOS: Apple's own binaries (e.g. `/usr/bin/curl`) bypass it,
-Homebrew/nvm builds and Go binaries work. Linux: programs that skip libc —
-Go and other statically linked binaries — bypass it. Not available on Windows.
+- **macOS:** sessions load a small interpose library (`DYLD_INSERT_LIBRARIES`).
+- **Linux:** each pane runs under a ~1 MB seccomp supervisor that handles
+  `connect`/`bind`/`getsockname` for every program, Go and static binaries
+  included. The gateway runs a per-router DNS stub for programs that do
+  their own DNS.
+- Where supervision is blocked (Yama `ptrace_scope` ≥ 2, or a container's
+  default seccomp profile), sax warns and falls back to `LD_PRELOAD`, which
+  covers libc programs only.
+
+Both pieces are compiled once with the system C compiler
+(`xcode-select --install` / `apt install build-essential` if missing; Linux
+5.9+ for the supervisor).
+
+Limits: TCP only, and not available on Windows. On macOS, Apple's own
+binaries (e.g. `/usr/bin/curl`) bypass the library; Homebrew/nvm builds and Go
+binaries work.
 
 ## Agent / Scripting API
 

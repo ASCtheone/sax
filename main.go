@@ -1292,6 +1292,7 @@ func doServerMode(name string, command []string, workDir string) {
 	}
 	// Sessions inside a vnet router add the shim settings to every pane.
 	pty.Configure(rc.Shell(), append(rc.EnvStrings(), vnet.PaneEnv(os.Getenv)...))
+	pty.SetWrapper(vnet.PaneWrapper(os.Getenv))
 
 	// "set default-dir" provides a fallback working directory when one was not
 	// supplied explicitly via --dir.
