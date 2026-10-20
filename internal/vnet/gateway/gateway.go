@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +45,15 @@ type Config struct {
 	// DNSUpstream and DNSSearch default to the host's /etc/resolv.conf.
 	DNSUpstream []string
 	DNSSearch   []string
+	// HostDNSAddr serves registered domains (sax net register) to the OS
+	// resolver; "" disables it.
+	HostDNSAddr string
+	// Port80Addr is bound while a domain is registered, so names work without
+	// a port. Defaults to 0.0.0.0:80 (loopback peers only) on macOS, where
+	// that needs no root, and 127.0.0.1:80 elsewhere.
+	Port80Addr string
+	// OnPort80 is told when the :80 listener opens or closes.
+	OnPort80 func(on bool)
 }
 
 // Gateway is the running HTTP router and port forwarder.
@@ -52,10 +62,16 @@ type Gateway struct {
 	routers  atomic.Pointer[map[string]vnet.Router]
 	hostAddr atomic.Value // string, set once the host listener is up
 
-	mu        sync.Mutex
-	listeners map[string]*routerListener // router name -> in-router HTTP listener
-	dns       map[string]*dnsServer      // router name -> DNS stub
-	publishes map[uint16]*publisher      // host port -> forwarder
+	registration atomic.Pointer[vnet.Registration]
+
+	mu           sync.Mutex
+	hostDNS      *hostDNS
+	port80       *http.Server
+	port80Ln     net.Listener
+	port80Warned bool
+	listeners    map[string]*routerListener // router name -> in-router HTTP listener
+	dns          map[string]*dnsServer      // router name -> DNS stub
+	publishes    map[uint16]*publisher      // host port -> forwarder
 }
 
 // routerListener serves one router's HTTP hosts for its sessions.
@@ -79,6 +95,12 @@ func New(cfg Config) *Gateway {
 	if cfg.DNSUpstream == nil && cfg.DNSSearch == nil {
 		cfg.DNSUpstream, cfg.DNSSearch = hostResolvers(resolvConf)
 	}
+	if cfg.Port80Addr == "" {
+		cfg.Port80Addr = net.JoinHostPort("127.0.0.1", httpPort80)
+		if runtime.GOOS == "darwin" {
+			cfg.Port80Addr = net.JoinHostPort(wildcardHost, httpPort80)
+		}
+	}
 	g := &Gateway{
 		cfg:       cfg,
 		listeners: map[string]*routerListener{},
@@ -87,6 +109,7 @@ func New(cfg Config) *Gateway {
 	}
 	empty := map[string]vnet.Router{}
 	g.routers.Store(&empty)
+	g.registration.Store(&vnet.Registration{})
 	return g
 }
 
@@ -109,6 +132,16 @@ func (g *Gateway) Run(ctx context.Context) error {
 		}
 	}()
 	g.hostAddr.Store(ln.Addr().String())
+	if g.cfg.HostDNSAddr != "" {
+		h, err := newHostDNS(g.cfg.HostDNSAddr, g.cfg.Logf)
+		if err != nil {
+			g.cfg.Logf("gateway: host dns %s: %v (registered domains will not resolve)", g.cfg.HostDNSAddr, err)
+		} else {
+			g.mu.Lock()
+			g.hostDNS = h
+			g.mu.Unlock()
+		}
+	}
 
 	ticker := time.NewTicker(g.cfg.Reload)
 	defer ticker.Stop()
@@ -141,6 +174,7 @@ func (g *Gateway) Sync() error {
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.syncHostNames()
 	for _, r := range list {
 		tables, _ := r.Tables()
 		g.syncDNS(r, tables.Names)
@@ -228,6 +262,11 @@ func (g *Gateway) shutdown() {
 	for name := range g.dns {
 		g.closeDNS(name)
 	}
+	if g.hostDNS != nil {
+		g.hostDNS.close()
+		g.hostDNS = nil
+	}
+	g.syncPort80(false)
 	for port, p := range g.publishes {
 		p.close()
 		delete(g.publishes, port)

@@ -53,7 +53,7 @@ func TestNetPublishFlow(t *testing.T) {
 	}
 	out.Reset()
 	r, _ := s.Get("v1")
-	printHostURLs(&out, r)
+	printHostURLs(&out, s, r)
 	if !strings.Contains(out.String(), "127.0.0.1:15432 -> db:5432") {
 		t.Errorf("host URLs:\n%s", out.String())
 	}
@@ -67,10 +67,11 @@ func TestNetPublishFlow(t *testing.T) {
 
 func TestPrintHostURLs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no running gateway state: default port
+	s := vnet.NewStore(t.TempDir())
 	r, _ := vnet.NewRouter("v1", "10.12.12.0/24", "")
 	r, _ = r.WithRule("bob.lan/* -> web:4200")
 	var out bytes.Buffer
-	printHostURLs(&out, r)
+	printHostURLs(&out, s, r)
 	if !strings.Contains(out.String(), "http://bob.lan.v1.localhost:7480") {
 		t.Errorf("output:\n%s", out.String())
 	}
@@ -81,7 +82,7 @@ func TestPrintHostURLs(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(vnetRoot(), gatewayStateFile), []byte(`{"pid":1,"addr":"0.0.0.0:80"}`), 0o644)
 	out.Reset()
-	printHostURLs(&out, r)
+	printHostURLs(&out, s, r)
 	if !strings.Contains(out.String(), "http://bob.lan.v1.localhost\n") {
 		t.Errorf("port 80 output:\n%s", out.String())
 	}

@@ -11,11 +11,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/asc/sax/internal/vnet"
 	"github.com/asc/sax/internal/vnet/gateway"
+	"github.com/asc/sax/internal/vnet/hostdns"
 )
 
 // gatewayStateFile records where the running gateway listens, so the CLI can
@@ -24,8 +26,9 @@ import (
 const gatewayStateFile = "_gateway.json"
 
 type gatewayState struct {
-	PID  int    `json:"pid"`
-	Addr string `json:"addr"`
+	PID    int    `json:"pid"`
+	Addr   string `json:"addr"`
+	Port80 bool   `json:"port80,omitempty"` // also serving :80 for registered domains
 }
 
 func gatewayStatePath() string { return filepath.Join(vnetRoot(), gatewayStateFile) }
@@ -47,7 +50,26 @@ func doNetGateway(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
-	g := gateway.New(gateway.Config{Store: vnetStore(), HostAddr: addr, Logf: log.Printf})
+	var state gatewayState
+	writeState := func() {
+		data, _ := json.Marshal(state)
+		if err := os.WriteFile(gatewayStatePath(), data, 0o644); err != nil {
+			log.Printf("gateway: write state: %v", err)
+		}
+	}
+	var stateMu sync.Mutex
+	g := gateway.New(gateway.Config{
+		Store: vnetStore(), HostAddr: addr, Logf: log.Printf,
+		HostDNSAddr: hostdns.DefaultDNSAddr,
+		OnPort80: func(on bool) {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+			state.Port80 = on
+			if state.Addr != "" {
+				writeState()
+			}
+		},
+	})
 	errc := make(chan error, 1)
 	go func() { errc <- g.Run(ctx) }()
 
@@ -62,10 +84,10 @@ func doNetGateway(args []string) error {
 		}
 		sleepBriefly()
 	}
-	state, _ := json.Marshal(gatewayState{PID: os.Getpid(), Addr: g.HostAddr()})
-	if err := os.WriteFile(gatewayStatePath(), state, 0o644); err != nil {
-		log.Printf("gateway: write state: %v", err)
-	}
+	stateMu.Lock()
+	state.PID, state.Addr = os.Getpid(), g.HostAddr()
+	writeState()
+	stateMu.Unlock()
 	defer os.Remove(gatewayStatePath())
 	fmt.Printf("sax vnet gateway: http://<host>.<router>.localhost%s\n", portSuffix(g.HostAddr()))
 	return <-errc
@@ -75,17 +97,21 @@ func sleepBriefly() { time.Sleep(20 * time.Millisecond) }
 
 func splitHostPort(addr string) (string, string, error) { return net.SplitHostPort(addr) }
 
+// readGatewayState returns the running gateway's state (zero if none).
+func readGatewayState() gatewayState {
+	var st gatewayState
+	if data, err := os.ReadFile(gatewayStatePath()); err == nil {
+		_ = json.Unmarshal(data, &st)
+	}
+	return st
+}
+
 // gatewayAddr returns the running gateway's host address, or the default.
 func gatewayAddr() string {
-	data, err := os.ReadFile(gatewayStatePath())
-	if err != nil {
-		return gateway.DefaultHostAddr
+	if st := readGatewayState(); st.Addr != "" {
+		return st.Addr
 	}
-	var st gatewayState
-	if json.Unmarshal(data, &st) != nil || st.Addr == "" {
-		return gateway.DefaultHostAddr
-	}
-	return st.Addr
+	return gateway.DefaultHostAddr
 }
 
 // portSuffix is ":7480" for a host address, or "" for port 80.
@@ -102,8 +128,12 @@ var hostOS = runtime.GOOS
 
 // needsGateway reports whether any router has HTTP routes or publishes, or
 // (on Linux) sessions, whose Go/static programs resolve names through the
-// gateway's DNS stub.
+// gateway's DNS stub, or whether a domain is registered (its lookups must be
+// answered).
 func needsGateway(s vnet.Store) bool {
+	if reg, err := s.Registration(); err == nil && len(reg.Domains) > 0 {
+		return true
+	}
 	routers, err := s.List()
 	if err != nil {
 		return false
@@ -159,16 +189,16 @@ func netUnpublish(w io.Writer, s vnet.Store, pos []string) error {
 
 // printHostURLs lists how to reach a router's HTTP hosts and publishes from
 // the host machine.
-func printHostURLs(w io.Writer, r vnet.Router) {
+func printHostURLs(w io.Writer, s vnet.Store, r vnet.Router) {
 	tables, _ := r.Tables()
 	pubs, _ := r.ParsedPublish()
 	if len(tables.HTTP) == 0 && len(pubs) == 0 {
 		return
 	}
 	fmt.Fprintln(w, "\nfrom the host:")
-	suffix := portSuffix(gatewayAddr())
+	reg, _ := s.Registration()
 	for _, h := range tables.HTTP {
-		fmt.Fprintf(w, "  http://%s.%s.localhost%s\n", h.Host, r.Name, suffix)
+		fmt.Fprintf(w, "  %s\n", hostURL(s, reg, r, h.Host))
 	}
 	for _, p := range pubs {
 		fmt.Fprintf(w, "  127.0.0.1:%d -> %s\n", p.HostPort, p.Target)

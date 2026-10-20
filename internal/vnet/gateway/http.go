@@ -13,15 +13,23 @@ import (
 
 const localhostSuffix = ".localhost"
 
-// serveHost handles host-side requests for <host>.<router>.localhost.
+// serveHost handles host-side requests: <host>.<router>.localhost always,
+// and names under registered domains (app1.lan, app1.v2.lan).
 func (g *Gateway) serveHost(w http.ResponseWriter, req *http.Request) {
-	routerName, host, ok := parseLocalhostHost(req.Host)
-	if !ok {
-		http.Error(w, fmt.Sprintf("sax vnet gateway: use http://<host>.<router>%s (got %q)", localhostSuffix, req.Host),
-			http.StatusNotFound)
+	if routerName, host, ok := parseLocalhostHost(req.Host); ok {
+		g.serve(w, req, routerName, host)
 		return
 	}
-	g.serve(w, req, routerName, host)
+	routerName, host, msg := g.resolveDomainHost(req.Host)
+	if routerName != "" {
+		g.serve(w, req, routerName, host)
+		return
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("sax vnet gateway: use http://<host>.<router>%s or register a domain "+
+			"with sax net register (got %q)", localhostSuffix, req.Host)
+	}
+	http.Error(w, msg, http.StatusNotFound)
 }
 
 // parseLocalhostHost splits "bob.lan.v1.localhost[:port]" into router "v1"

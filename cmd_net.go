@@ -25,6 +25,8 @@ const netUsage = `usage: sax net                                 list routers
                                                  forward 127.0.0.1:<host-port> into the router
        sax net unpublish <router> <host-port>
        sax net gateway [--port N]                run the HTTP router (normally auto-started)
+       sax net register [domain...]              one sudo: http://<host>.lan in browsers (default: lan)
+       sax net unregister [domain...]
        sax -x <name> --net <router>[:<host>] [--ip A] <cmd...>
                                                  run a session inside a router
 
@@ -76,6 +78,10 @@ func doNet(args []string) {
 		err = netUnpublish(os.Stdout, vnetStore(), pos)
 	case "gateway":
 		err = doNetGateway(args)
+	case "register":
+		err = netRegister(os.Stdout, vnetStore(), daemonRunner{}, pos)
+	case "unregister":
+		err = netUnregister(os.Stdout, vnetStore(), pos)
 	case "up":
 		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"))
 	case "down":
@@ -124,6 +130,7 @@ func netList(w io.Writer, s vnet.Store) error {
 	}
 	if len(routers) == 0 {
 		fmt.Fprintln(w, "no routers (create one with: sax net create <name>)")
+		fmt.Fprintln(w, registrationStatus(s))
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -131,7 +138,11 @@ func netList(w io.Writer, s vnet.Store) error {
 	for _, r := range routers {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\n", r.Name, r.Subnet, dash(r.Domain), len(r.Sessions), len(r.Rules))
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "\n%s\n", registrationStatus(s))
+	return nil
 }
 
 func netCreate(w io.Writer, s vnet.Store, pos []string, subnet, domain string) error {
@@ -187,7 +198,7 @@ func netInspect(w io.Writer, s vnet.Store, pos []string) error {
 	}
 	_, warnings := r.Tables()
 	printRouter(w, r, warnings)
-	printHostURLs(w, r)
+	printHostURLs(w, s, r)
 	fmt.Fprintf(w, "\nstate: %s\n", s.RouterDir(r.Name))
 	return nil
 }
