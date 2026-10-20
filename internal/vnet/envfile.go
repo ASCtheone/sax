@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	// EnvFileName is the file `sax net up` looks for by default.
-	EnvFileName = "sax.net.yaml"
+	// EnvFileName is the file `sax net up` looks for when -f is not given.
+	EnvFileName = ".sax.lan"
+	// LegacyEnvFileName is still picked up when there is no EnvFileName
+	// (the default name of sax v1.4 and v1.5).
+	LegacyEnvFileName = "sax.net.yaml"
 	// DefaultSubnet is used when an env file or `sax net create` gives none.
 	DefaultSubnet = "10.77.0.0/24"
 )
@@ -27,7 +30,7 @@ type SessionSpec struct {
 	Env map[string]string `yaml:"env"`
 }
 
-// EnvFile is a parsed sax.net.yaml: one router, its sessions and its ordered
+// EnvFile is a parsed .sax.lan (YAML): one router, its sessions and its ordered
 // routes. Routes are a YAML list so their written order is the match order.
 type EnvFile struct {
 	Router   string                 `yaml:"router"`
@@ -147,4 +150,16 @@ func (e EnvFile) Plan() (Router, []string, error) {
 
 	_, warnings := r.Tables()
 	return r, warnings, nil
+}
+
+// FindEnvFile returns the env file to use in dir: .sax.lan, or the legacy
+// sax.net.yaml when only that exists.
+func FindEnvFile(dir string) (string, error) {
+	for _, name := range []string{EnvFileName, LegacyEnvFileName} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no %s in %s (create one or pass -f <file>)", EnvFileName, dir)
 }

@@ -134,3 +134,22 @@ func TestLoadEnvFile_ResolvesCwd(t *testing.T) {
 		t.Errorf("missing file error should name the file: %v", err)
 	}
 }
+
+func TestFindEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := FindEnvFile(dir); err == nil || !strings.Contains(err.Error(), EnvFileName) {
+		t.Errorf("empty dir: err = %v (should name %s)", err, EnvFileName)
+	}
+
+	legacy := filepath.Join(dir, LegacyEnvFileName)
+	_ = os.WriteFile(legacy, []byte("router: v1\n"), 0o644)
+	if got, err := FindEnvFile(dir); err != nil || got != legacy {
+		t.Errorf("legacy only = %q, %v", got, err)
+	}
+
+	current := filepath.Join(dir, EnvFileName)
+	_ = os.WriteFile(current, []byte("router: v1\n"), 0o644)
+	if got, err := FindEnvFile(dir); err != nil || got != current {
+		t.Errorf("both present = %q, %v; want %s first", got, err, EnvFileName)
+	}
+}

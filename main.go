@@ -406,8 +406,8 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
        sax nx stop [app]            stop an app (all NX sessions if no app)
        sax nx <app>                 shorthand for sax nx serve <app>
 
-   net: sax net up [-f file] [-d]    start the apps of a sax.net.yaml and open a view with a
-                                    tab per app (-d: stay detached, attach later: sax -a <router>)
+   net: sax net up [-f file] [-d]    start the apps of ./.sax.lan (or -f file) and open a view
+                                    with a tab per app (-d: stay detached; later: sax -a <router>)
        sax net down <router>        stop a router's apps and its view
        sax net                      list routers (sax net help for every command)
        sax net inspect <router>     IPs, routes and the URLs to open
@@ -415,7 +415,7 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
        sax net create <router>      create a router by hand
        sax net map <router> <pattern> <target>
                                     add a rule, e.g. bob.lan/api/* api:3200
-       sax net check [-f file]      validate a sax.net.yaml env file
+       sax net check [-f file]      validate ./.sax.lan (or -f file)
        sax -x <name> --net <router> <command...>
                                     run any session inside a router
 

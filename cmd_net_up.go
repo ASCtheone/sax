@@ -168,13 +168,23 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string, attach boo
 	return nil
 }
 
+// resolveEnvPath returns path, or the default env file of the current
+// folder (.sax.lan, else sax.net.yaml) when path is "".
+func resolveEnvPath(path string) (string, error) {
+	if path != "" {
+		return path, nil
+	}
+	return vnet.FindEnvFile(".")
+}
+
 func loadEnvFile(path string) (vnet.EnvFile, error) {
-	if path == "" {
-		path = vnet.EnvFileName
+	path, err := resolveEnvPath(path)
+	if err != nil {
+		return vnet.EnvFile{}, err
 	}
 	e, err := vnet.LoadEnvFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return vnet.EnvFile{}, fmt.Errorf("%s not found (pass -f <file>)", path)
+		return vnet.EnvFile{}, fmt.Errorf("%s not found", path)
 	}
 	return e, err
 }

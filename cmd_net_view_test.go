@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -121,5 +123,33 @@ func TestWantsAttach_DetachFlag(t *testing.T) {
 		if wantsAttach(args) {
 			t.Errorf("wantsAttach(%v) = true", args)
 		}
+	}
+}
+
+func TestNetUp_DefaultFileIsDotSaxLan(t *testing.T) {
+	fakeShim(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, vnet.EnvFileName), []byte(upEnv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	s := vnet.NewStore(t.TempDir())
+	run := newFakeRunner()
+
+	if err := netUp(&bytes.Buffer{}, s, run, "", false); err != nil {
+		t.Fatalf("up without -f: %v", err)
+	}
+	if _, ok := run.launched["v1.api"]; !ok {
+		t.Error(".sax.lan was not used")
+	}
+	var out bytes.Buffer
+	if err := netCheck(&out, ""); err != nil || !strings.Contains(out.String(), ".sax.lan: ok") {
+		t.Errorf("check without -f: %v\n%s", err, out.String())
+	}
+
+	t.Chdir(t.TempDir())
+	err := netUp(&bytes.Buffer{}, s, run, "", false)
+	if err == nil || !strings.Contains(err.Error(), "no .sax.lan") || !strings.Contains(err.Error(), "-f") {
+		t.Errorf("no file: err = %v", err)
 	}
 }
