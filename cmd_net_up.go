@@ -205,15 +205,9 @@ func startEnvSession(run sessionRunner, s vnet.Store, r vnet.Router, paths shim.
 		env = append(env, k+"="+spec.Env[k])
 	}
 
-	// The command runs through the user's shell; the prefix re-exports the
-	// shim because macOS drops it when a SIP-protected shell starts.
-	getenv := func(k string) string {
-		if k == vnet.EnvShim {
-			return paths.Lib
-		}
-		return ""
-	}
-	command := []string{userShell(), "-c", vnet.WrapScript(spec.Cmd, getenv)}
+	// The command runs through the user's shell; on macOS the daemon
+	// re-exports the shim inside it (vnet.LaunderCommand).
+	command := []string{userShell(), "-c", spec.Cmd}
 	return run.Launch(saxName, command, spec.Cwd, env)
 }
 

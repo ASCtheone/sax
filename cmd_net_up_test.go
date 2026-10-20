@@ -102,7 +102,7 @@ func TestNetUp_StartsSessionsWithNetworkEnv(t *testing.T) {
 	if api.workDir != filepath.Join(filepath.Dir(path), "api") {
 		t.Errorf("workDir = %s", api.workDir)
 	}
-	wantCmd := []string{"/bin/zsh", "-c", "export DYLD_INSERT_LIBRARIES='/s/lib.dylib'\nnpm run start:dev"}
+	wantCmd := []string{"/bin/zsh", "-c", "npm run start:dev"}
 	if strings.Join(api.command, "|") != strings.Join(wantCmd, "|") {
 		t.Errorf("command = %q", api.command)
 	}

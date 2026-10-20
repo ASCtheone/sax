@@ -1,4 +1,5 @@
-// sax vnet interpose shim, network half (macOS, DYLD_INSERT_LIBRARIES).
+// sax vnet interpose shim, network half (macOS DYLD_INSERT_LIBRARIES,
+// Linux LD_PRELOAD).
 //
 // Gives each session a *virtual* IP inside a router subnet without root:
 //   bind(any|loopback|self : P)  -> real bind 127.0.0.1:0, registered as self:P
@@ -118,7 +119,7 @@ static socklen_t real_addr(int family, in_port_t port, struct sockaddr_storage *
     memset(out, 0, sizeof *out);
     if (family == AF_INET6) {
         struct sockaddr_in6 *s = (void *)out;
-        s->sin6_len = sizeof *s;
+        SET_SOCKADDR_LEN(s, sin6_len);
         s->sin6_family = AF_INET6;
         s->sin6_port = port;
         s->sin6_addr.s6_addr[10] = 0xff;
@@ -128,7 +129,7 @@ static socklen_t real_addr(int family, in_port_t port, struct sockaddr_storage *
         return sizeof *s;
     }
     struct sockaddr_in *s = (void *)out;
-    s->sin_len = sizeof *s;
+    SET_SOCKADDR_LEN(s, sin_len);
     s->sin_family = AF_INET;
     s->sin_port = port;
     s->sin_addr.s_addr = LOOPBACK;
@@ -242,16 +243,22 @@ static vfd_t vfd_get(int fd) {
 
 // ---- hooks ---------------------------------------------------------------
 
-static int sax_bind(int fd, const struct sockaddr *addr, socklen_t len) {
-    if (!on() || !addr || !is_stream(fd)) return bind(fd, addr, len);
+DECLARE_REAL(bind)
+DECLARE_REAL(connect)
+DECLARE_REAL(getsockname)
+DECLARE_REAL(close)
+DECLARE_REAL(getaddrinfo)
+
+HOOK_LINKAGE int HOOK(bind)(int fd, const struct sockaddr *addr, socklen_t len) {
+    if (!on() || !addr || !is_stream(fd)) return REAL(bind)(fd, addr, len);
 
     in_addr_t ip;
     in_port_t vport;
     int kind = v4_of(addr, len, &ip, &vport);
-    if (kind < 0) return bind(fd, addr, len);
+    if (kind < 0) return REAL(bind)(fd, addr, len);
     if (kind == 0 && !is_loopback(ip) && ip != cfg.self) {
         if (in_subnet(ip)) { errno = EADDRNOTAVAIL; return -1; }
-        return bind(fd, addr, len);  // a real host interface: leave it alone
+        return REAL(bind)(fd, addr, len);  // a real host interface: leave it alone
     }
 
     if (vport != 0 && lookup_port(cfg.self, vport) != 0) {
@@ -265,11 +272,11 @@ static int sax_bind(int fd, const struct sockaddr *addr, socklen_t len) {
     }
     struct sockaddr_storage real;
     socklen_t rlen = real_addr(addr->sa_family, 0, &real);
-    if (bind(fd, (struct sockaddr *)&real, rlen) != 0) return -1;
+    if (REAL(bind)(fd, (struct sockaddr *)&real, rlen) != 0) return -1;
 
     struct sockaddr_storage got;
     socklen_t glen = sizeof got;
-    if (getsockname(fd, (struct sockaddr *)&got, &glen) != 0) return -1;
+    if (REAL(getsockname)(fd, (struct sockaddr *)&got, &glen) != 0) return -1;
     in_port_t real_port = got.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&got)->sin6_port
                                                     : ((struct sockaddr_in *)&got)->sin_port;
     if (vport == 0) vport = real_port;
@@ -278,20 +285,20 @@ static int sax_bind(int fd, const struct sockaddr *addr, socklen_t len) {
     vfd_set(fd, (vfd_t){.owner = getpid(), .vip = cfg.self, .vport = vport, .listening_entry = 1});
     return 0;
 }
-DYLD_INTERPOSE(sax_bind, bind)
+EXPORT_HOOK(bind)
 
-static int sax_connect(int fd, const struct sockaddr *addr, socklen_t len) {
-    if (!on() || !addr || !is_stream(fd)) return connect(fd, addr, len);
+HOOK_LINKAGE int HOOK(connect)(int fd, const struct sockaddr *addr, socklen_t len) {
+    if (!on() || !addr || !is_stream(fd)) return REAL(connect)(fd, addr, len);
 
     in_addr_t ip;
     in_port_t port;
-    if (v4_of(addr, len, &ip, &port) != 0) return connect(fd, addr, len);
+    if (v4_of(addr, len, &ip, &port) != 0) return REAL(connect)(fd, addr, len);
 
     int svc = lookup_svc(&ip, &port);
     in_port_t real;
     if (is_loopback(ip)) {
         real = lookup_port(cfg.self, port);
-        if (!real) return connect(fd, addr, len);  // a real host service
+        if (!real) return REAL(connect)(fd, addr, len);  // a real host service
     } else if (in_subnet(ip)) {
         real = lookup_port(ip, port);
         if (!real) { errno = ECONNREFUSED; return -1; }
@@ -299,17 +306,17 @@ static int sax_connect(int fd, const struct sockaddr *addr, socklen_t len) {
         errno = ENETUNREACH;  // service pointing outside the router
         return -1;
     } else {
-        return connect(fd, addr, len);
+        return REAL(connect)(fd, addr, len);
     }
 
     struct sockaddr_storage target;
     socklen_t tlen = real_addr(addr->sa_family, real, &target);
-    return connect(fd, (struct sockaddr *)&target, tlen);
+    return REAL(connect)(fd, (struct sockaddr *)&target, tlen);
 }
-DYLD_INTERPOSE(sax_connect, connect)
+EXPORT_HOOK(connect)
 
-static int sax_getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
-    int rc = getsockname(fd, addr, len);
+HOOK_LINKAGE int HOOK(getsockname)(int fd, struct sockaddr *addr, socklen_t *len) {
+    int rc = REAL(getsockname)(fd, addr, len);
     if (rc != 0 || !on()) return rc;
     vfd_t v = vfd_get(fd);
     if (v.owner != getpid()) return rc;
@@ -327,9 +334,9 @@ static int sax_getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
     }
     return rc;
 }
-DYLD_INTERPOSE(sax_getsockname, getsockname)
+EXPORT_HOOK(getsockname)
 
-static int sax_close(int fd) {
+HOOK_LINKAGE int HOOK(close)(int fd) {
     if (on()) {
         vfd_t v = vfd_take(fd);
         if (v.owner == getpid() && v.listening_entry) {
@@ -338,20 +345,20 @@ static int sax_close(int fd) {
             unlink(path);
         }
     }
-    return close(fd);
+    return REAL(close)(fd);
 }
-DYLD_INTERPOSE(sax_close, close)
+EXPORT_HOOK(close)
 
-static int sax_getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
+HOOK_LINKAGE int HOOK(getaddrinfo)(const char *node, const char *service, const struct addrinfo *hints,
                            struct addrinfo **res) {
     char ip[64];
     if (!on() || !node || !lookup_name(node, ip, sizeof ip))
-        return getaddrinfo(node, service, hints, res);
+        return REAL(getaddrinfo)(node, service, hints, res);
 
     struct addrinfo h = {0};
     if (hints) h = *hints;
     h.ai_flags = (h.ai_flags | AI_NUMERICHOST) & ~AI_ADDRCONFIG;
     if (h.ai_family == AF_INET6) h.ai_flags |= AI_V4MAPPED;
-    return getaddrinfo(ip, service, &h, res);
+    return REAL(getaddrinfo)(ip, service, &h, res);
 }
-DYLD_INTERPOSE(sax_getaddrinfo, getaddrinfo)
+EXPORT_HOOK(getaddrinfo)

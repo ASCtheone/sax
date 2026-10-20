@@ -237,11 +237,15 @@ Inside a router, an app requesting `http://bob.lan/api/users` hits `api`; from t
 automatically; `sax net gateway --port 80` drops the port). The MCP server
 exposes the same through `sax_net_*` tools and a `net` parameter on `sax_exec`.
 
-How it works: sessions load a small interpose library (`DYLD_INSERT_LIBRARIES`)
-that maps virtual addresses to real loopback sockets, so it needs neither root
-nor network namespaces. The library is compiled once with the system C compiler
-(`xcode-select --install` if missing). Limits: macOS only for now; TCP only;
-Apple's own binaries (e.g. `/usr/bin/curl`) bypass it — Homebrew/nvm builds work.
+How it works: sessions load a small interpose library (`DYLD_INSERT_LIBRARIES`
+on macOS, `LD_PRELOAD` on Linux) that maps virtual addresses to real loopback
+sockets, so it needs neither root nor network namespaces. The library is
+compiled once with the system C compiler (`xcode-select --install` /
+`apt install build-essential` if missing).
+
+Limits: TCP only. macOS: Apple's own binaries (e.g. `/usr/bin/curl`) bypass it,
+Homebrew/nvm builds and Go binaries work. Linux: programs that skip libc —
+Go and other statically linked binaries — bypass it. Not available on Windows.
 
 ## Agent / Scripting API
 

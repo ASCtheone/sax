@@ -2,6 +2,7 @@ package vnet
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/asc/sax/internal/vnet/shim"
@@ -22,10 +23,26 @@ const (
 	EnvOrigZDotDir = "SAX_VNET_ZDOTDIR"
 
 	envDyld          = "DYLD_INSERT_LIBRARIES"
+	envLDPreload     = "LD_PRELOAD"
 	envNodeOptions   = "NODE_OPTIONS"
 	envZDotDir       = "ZDOTDIR"
 	envPromptCommand = "PROMPT_COMMAND"
 )
+
+// goos is runtime.GOOS; tests override it.
+var goos = runtime.GOOS
+
+// preloadVar is the loader variable that injects the shim.
+func preloadVar() string {
+	if goos == "darwin" {
+		return envDyld
+	}
+	return envLDPreload
+}
+
+// sipWorkarounds reports whether panes need the macOS SIP workarounds
+// (re-exporting the shim inside Apple's shells).
+func sipWorkarounds() bool { return goos == "darwin" }
 
 // Member is one session's place in a router.
 type Member struct {
@@ -65,24 +82,29 @@ func SessionName(router, host string) string { return router + "." + host }
 
 // DaemonEnv is the environment for the sax daemon of a networked session.
 func DaemonEnv(m Member, p shim.Paths) []string {
-	return []string{
+	env := []string{
 		EnvDir + "=" + m.Dir,
 		EnvIP + "=" + m.IP,
 		EnvSubnet + "=" + m.Subnet,
 		EnvRouter + "=" + m.Router,
 		EnvHost + "=" + m.Host,
 		EnvShim + "=" + p.Lib,
-		EnvReinject + "=" + p.Reinject,
-		EnvZWrapper + "=" + p.ZDotDir,
 	}
+	if p.Reinject != "" {
+		env = append(env, EnvReinject+"="+p.Reinject)
+	}
+	if p.ZDotDir != "" {
+		env = append(env, EnvZWrapper+"="+p.ZDotDir)
+	}
+	return env
 }
 
 // PaneEnv returns the extra environment for a pane spawned by a networked
 // daemon, or nil when the daemon is not in a router. getenv reads the
 // daemon's environment.
 //
-//   - DYLD_INSERT_LIBRARIES loads the shim into non-SIP programs started
-//     directly by the pane.
+//   - DYLD_INSERT_LIBRARIES (macOS) / LD_PRELOAD (Linux) loads the shim; on
+//     macOS only non-SIP programs started directly by the pane keep it.
 //   - NODE_OPTIONS --require is Node's fallback when the shim was lost on
 //     the way (e.g. through #!/usr/bin/env node).
 //   - ZDOTDIR (zsh) and PROMPT_COMMAND (bash) re-export the shim inside the
@@ -92,7 +114,11 @@ func PaneEnv(getenv func(string) string) []string {
 	if lib == "" {
 		return nil
 	}
-	env := []string{envDyld + "=" + lib}
+	preload := lib
+	if cur := getenv(preloadVar()); cur != "" && !strings.Contains(cur, lib) {
+		preload = lib + ":" + cur
+	}
+	env := []string{preloadVar() + "=" + preload}
 
 	if reinject := getenv(EnvReinject); reinject != "" {
 		opts := getenv(envNodeOptions)
@@ -110,20 +136,10 @@ func PaneEnv(getenv func(string) string) []string {
 		}
 	}
 
-	if getenv(envPromptCommand) == "" {
+	if sipWorkarounds() && getenv(envPromptCommand) == "" {
 		env = append(env, envPromptCommand+"="+exportLine(lib))
 	}
 	return env
-}
-
-// WrapScript prefixes a shell script so a SIP-protected shell re-exports the
-// shim before running it. Returns the script unchanged outside a router.
-func WrapScript(script string, getenv func(string) string) string {
-	lib := getenv(EnvShim)
-	if lib == "" {
-		return script
-	}
-	return exportLine(lib) + "\n" + script
 }
 
 func exportLine(lib string) string {
@@ -148,6 +164,11 @@ func StripEnv(environ []string) []string {
 		case strings.HasPrefix(k, "SAX_VNET_"):
 			continue
 		case k == envDyld && lib != "" && v == lib:
+			continue
+		case k == envLDPreload && lib != "" && strings.Contains(v, lib):
+			if rest := strings.Trim(strings.ReplaceAll(v, lib, ""), ": "); rest != "" {
+				out = append(out, envLDPreload+"="+rest)
+			}
 			continue
 		case k == envPromptCommand && lib != "" && v == exportLine(lib):
 			continue

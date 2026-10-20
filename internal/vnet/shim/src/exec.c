@@ -11,6 +11,8 @@
 // Every child also gets DYLD_INSERT_LIBRARIES and the SAX_VNET_* settings
 // back if the caller passed a scrubbed environment.
 
+#ifdef __APPLE__  // Linux has no SIP: LD_PRELOAD survives every exec.
+
 #include <errno.h>
 #include <fcntl.h>
 #include <spawn.h>
@@ -238,3 +240,5 @@ static int sax_posix_spawnp(pid_t *pid, const char *file, const posix_spawn_file
     return sax_posix_spawn(pid, resolved, fa, attr, argv, envp);
 }
 DYLD_INTERPOSE(sax_posix_spawnp, posix_spawnp)
+
+#endif  // __APPLE__

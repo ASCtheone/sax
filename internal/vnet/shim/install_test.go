@@ -18,11 +18,8 @@ func TestVersionIsStable(t *testing.T) {
 }
 
 func TestInstall(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		if _, err := Install(t.TempDir()); !errors.Is(err, ErrUnsupported) {
-			t.Errorf("err = %v, want ErrUnsupported", err)
-		}
-		return
+	if _, ok := currentPlatform(); !ok {
+		t.Skip("no shim backend on " + runtime.GOOS)
 	}
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("no C compiler")
@@ -36,14 +33,21 @@ func TestInstall(t *testing.T) {
 	if p.Dir != filepath.Join(root, Version()) {
 		t.Errorf("Dir = %s", p.Dir)
 	}
-	for _, f := range []string{p.Lib, p.Reinject, filepath.Join(p.ZDotDir, ".zshenv")} {
-		if _, err := os.Stat(f); err != nil {
-			t.Errorf("missing %s: %v", f, err)
-		}
+	if _, err := os.Stat(p.Lib); err != nil {
+		t.Errorf("missing %s: %v", p.Lib, err)
 	}
-	zshenv, _ := os.ReadFile(filepath.Join(p.ZDotDir, ".zshenv"))
-	if !strings.Contains(string(zshenv), "DYLD_INSERT_LIBRARIES") {
-		t.Error(".zshenv does not re-export the shim")
+	if runtime.GOOS == "darwin" {
+		for _, f := range []string{p.Reinject, filepath.Join(p.ZDotDir, ".zshenv")} {
+			if _, err := os.Stat(f); err != nil {
+				t.Errorf("missing %s: %v", f, err)
+			}
+		}
+		zshenv, _ := os.ReadFile(filepath.Join(p.ZDotDir, ".zshenv"))
+		if !strings.Contains(string(zshenv), "DYLD_INSERT_LIBRARIES") {
+			t.Error(".zshenv does not re-export the shim")
+		}
+	} else if p.Reinject != "" || p.ZDotDir != "" {
+		t.Error("SIP helpers are macOS only")
 	}
 
 	// Second install reuses the cached build.
@@ -64,20 +68,29 @@ func TestInstall(t *testing.T) {
 	}
 }
 
+func TestInstall_Unsupported(t *testing.T) {
+	orig := goos
+	goos = "plan9"
+	defer func() { goos = orig }()
+	if _, err := Install(t.TempDir()); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("err = %v, want ErrUnsupported", err)
+	}
+}
+
 func TestInstall_MissingCompiler(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("darwin only")
+	if _, ok := currentPlatform(); !ok {
+		t.Skip("no shim backend")
 	}
 	t.Setenv("CC", "definitely-not-a-compiler")
 	_, err := Install(t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "xcode-select") {
-		t.Errorf("err = %v, want hint about xcode-select", err)
+	if err == nil || !strings.Contains(err.Error(), "C compiler") {
+		t.Errorf("err = %v, want a hint about installing a C compiler", err)
 	}
 }
 
 func TestInstall_CompileFailure(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("darwin only")
+	if _, ok := currentPlatform(); !ok {
+		t.Skip("no shim backend")
 	}
 	t.Setenv("CC", "false") // exists, always fails
 	root := t.TempDir()

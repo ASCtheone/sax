@@ -29,6 +29,10 @@ type Server struct {
 	InitCmdArgs []string
 	InitWorkDir string
 
+	// LazyStart defers creating the session (and running its command) until
+	// the first client attaches; otherwise it starts with the daemon.
+	LazyStart bool
+
 	// Saxrc is the parsed ~/.saxrc, consulted for startup hooks and run
 	// commands when sessions are created. Never nil after doServerMode wiring.
 	Saxrc *saxrc.Config
@@ -91,8 +95,10 @@ func (s *Server) Run() error {
 
 	// Start the session now so a detached command (sax -x, sax net up, MCP
 	// sax_exec) runs immediately instead of waiting for the first attach.
-	if _, err := s.ensureSession(defaultCols, defaultRows); err != nil {
-		log.Printf("failed to start session: %v", err)
+	if !s.LazyStart {
+		if _, err := s.ensureSession(defaultCols, defaultRows); err != nil {
+			log.Printf("failed to start session: %v", err)
+		}
 	}
 
 	// Accept loop

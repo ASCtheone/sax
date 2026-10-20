@@ -86,6 +86,7 @@ func TestDaemonEnv(t *testing.T) {
 }
 
 func TestPaneEnv(t *testing.T) {
+	withGOOS(t, "darwin")
 	base := map[string]string{
 		EnvShim:        testShim.Lib,
 		EnvReinject:    testShim.Reinject,
@@ -110,6 +111,7 @@ func TestPaneEnv(t *testing.T) {
 }
 
 func TestPaneEnv_Idempotent(t *testing.T) {
+	withGOOS(t, "darwin")
 	base := map[string]string{
 		EnvShim:          testShim.Lib,
 		EnvReinject:      testShim.Reinject,
@@ -135,21 +137,6 @@ func TestPaneEnv_NotNetworked(t *testing.T) {
 	}
 }
 
-func TestWrapScript(t *testing.T) {
-	got := WrapScript("npm run start:dev", func(k string) string {
-		if k == EnvShim {
-			return "/s/lib.dylib"
-		}
-		return ""
-	})
-	if got != "export DYLD_INSERT_LIBRARIES='/s/lib.dylib'\nnpm run start:dev" {
-		t.Errorf("WrapScript = %q", got)
-	}
-	if got := WrapScript("x", func(string) string { return "" }); got != "x" {
-		t.Errorf("unwrapped = %q", got)
-	}
-}
-
 func TestOwners(t *testing.T) {
 	r, _, _ := mustRouter(t).WithSession("api", "")
 	r2 := r.WithOwner("api", "v1.api")
@@ -163,6 +150,7 @@ func TestOwners(t *testing.T) {
 }
 
 func TestStripEnv(t *testing.T) {
+	withGOOS(t, "darwin")
 	daemon := map[string]string{
 		EnvShim:        testShim.Lib,
 		EnvReinject:    testShim.Reinject,
@@ -214,5 +202,42 @@ func TestStripEnv_LeavesForeignValuesAlone(t *testing.T) {
 	if got["PROMPT_COMMAND"] != "history -a" || got["ZDOTDIR"] != "/mine" || got["NODE_OPTIONS"] != "--inspect" ||
 		got["DYLD_INSERT_LIBRARIES"] != "/my/own.dylib" {
 		t.Errorf("StripEnv changed foreign values: %v", got)
+	}
+}
+
+func withGOOS(t *testing.T, os string) {
+	t.Helper()
+	orig := goos
+	goos = os
+	t.Cleanup(func() { goos = orig })
+}
+
+func TestPaneEnv_Linux(t *testing.T) {
+	withGOOS(t, "linux")
+	linuxShim := shim.Paths{Dir: "/s", Lib: "/s/libsaxvnet.so"} // no SIP helpers on Linux
+	daemon := envMap(DaemonEnv(Member{Router: "v1", Host: "api", IP: "10.0.0.2", Subnet: "10.0.0.0/24", Dir: "/d"}, linuxShim))
+	if _, ok := daemon[EnvReinject]; ok {
+		t.Error("no Node reinject on Linux")
+	}
+	daemon["LD_PRELOAD"] = "/usr/lib/libmine.so"
+
+	env := envMap(PaneEnv(func(k string) string { return daemon[k] }))
+	if env["LD_PRELOAD"] != "/s/libsaxvnet.so:/usr/lib/libmine.so" {
+		t.Errorf("LD_PRELOAD = %q (shim first, user's preload kept)", env["LD_PRELOAD"])
+	}
+	for _, k := range []string{"DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "ZDOTDIR", "PROMPT_COMMAND"} {
+		if _, ok := env[k]; ok {
+			t.Errorf("%s must not be set on Linux", k)
+		}
+	}
+
+	// Stripping restores the user's own preload.
+	var environ []string
+	for k, v := range env {
+		environ = append(environ, k+"="+v)
+	}
+	environ = append(environ, EnvShim+"=/s/libsaxvnet.so")
+	if got := envMap(StripEnv(environ)); got["LD_PRELOAD"] != "/usr/lib/libmine.so" {
+		t.Errorf("stripped LD_PRELOAD = %q", got["LD_PRELOAD"])
 	}
 }

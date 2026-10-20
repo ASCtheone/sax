@@ -662,7 +662,7 @@ func doCreateSession(name string, attach bool, extraEnv ...string) {
 		return
 	}
 
-	if err := launchDaemon(name, nil, "", extraEnv...); err != nil {
+	if err := launchDaemon(name, nil, "", append(lazyStartEnv(attach), extraEnv...)...); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -693,7 +693,7 @@ func doExecSession(name string, command []string, attach bool, workDir string, e
 		os.Exit(1)
 	}
 
-	if err := launchDaemon(name, command, workDir, extraEnv...); err != nil {
+	if err := launchDaemon(name, command, workDir, append(lazyStartEnv(attach), extraEnv...)...); err != nil {
 		fmt.Fprintf(os.Stderr, "sax: failed to start daemon: %v\n", err)
 		os.Exit(1)
 	}
@@ -1300,8 +1300,13 @@ func doServerMode(name string, command []string, workDir string) {
 	}
 
 	srv := server.NewServer(name)
+	srv.LazyStart = os.Getenv(envLazyStart) != ""
+	os.Unsetenv(envLazyStart) // panes must not inherit it
 	srv.Saxrc = rc
 	srv.InitWorkDir = workDir
+	// In a vnet router on macOS, keep the shim across SIP binaries (sh -c,
+	// #!/usr/bin/env scripts) for the first command; the shim does the rest.
+	command = vnet.LaunderCommand(command, os.Getenv, exec.LookPath)
 	if len(command) > 0 {
 		srv.InitCmd = command[0]
 		if len(command) > 1 {
@@ -1459,13 +1464,13 @@ func launchDaemon(name string, command []string, workDir string, extraEnv ...str
 		return fmt.Errorf("start daemon: %w", err)
 	}
 
-	go cmd.Wait()
+	trackDaemon(name, cmd)
 	return nil
 }
 
 func waitForSession(name string) bool {
 	for i := 0; i < 50; i++ {
-		if ipc.IsSessionAlive(name) {
+		if ipc.IsSessionAlive(name) || daemonFinishedOK(name) {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
