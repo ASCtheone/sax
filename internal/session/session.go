@@ -70,6 +70,19 @@ func (s *Session) AddTab() (*Tab, error) {
 	return tab, nil
 }
 
+// AddCommandTab adds a named tab running a command, keeping the current tab
+// focused (used to build multi-tab sessions up front).
+func (s *Session) AddCommandTab(name, cmd string, args []string, workDir string) (*Tab, error) {
+	cols, rows := s.PaneArea()
+	tab, err := NewTabWithCommand(cols, rows, cmd, args, workDir)
+	if err != nil {
+		return nil, err
+	}
+	tab.Name = name
+	s.Tabs = append(s.Tabs, tab)
+	return tab, nil
+}
+
 // RemoveTab removes the tab at the given index.
 func (s *Session) RemoveTab(idx int) {
 	if idx < 0 || idx >= len(s.Tabs) {

@@ -202,7 +202,7 @@ every session in it gets its own virtual IP, so `v1` and `v2` can both listen
 on `:3200` and each resolves `api`, `db`, `bob.lan` to its own copies.
 
 ```yaml
-# v1.yaml  (sax net up -f v1.yaml)
+# .sax.lan in your project: `sax net up` picks it up (or -f other-file)
 router: v1
 subnet: 10.12.12.0/24
 domain: lan
@@ -219,12 +219,14 @@ publish:
 ```
 
 ```bash
-sax net up -f v1.yaml        # create/update the router, start its sessions (idempotent)
-sax net up -f v2.yaml        # same app, another version, same ports
+sax net up                   # start v1's apps (./.sax.lan) and open a view: one tab per app
+                             #   (Ctrl+S d detaches; everything keeps running)
+sax net up -f v2.lan -d      # same app, another version, same ports; -d stays detached
+sax -a v2                    # open v2's view later
 sax net ls                   # routers
 sax net inspect v1           # sessions, IPs, rules, host URLs
-sax net down v1              # stop v1's sessions
-sax net check -f v1.yaml     # validate (e.g. warns about rules that can never match)
+sax net down v1              # stop v1's apps and its view
+sax net check                # validate ./.sax.lan (e.g. warns about rules that can never match)
 
 sax net create lab --subnet 10.20.0.0/24 --domain lan
 sax net map lab 'bob.lan/api/*' api:3200

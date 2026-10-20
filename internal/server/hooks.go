@@ -59,6 +59,13 @@ func (ms *ManagedSession) applyRunCmds(cmds []string) {
 	}
 }
 
+// TabSpec describes a tab created when a session starts.
+type TabSpec struct {
+	Name string   `json:"name"`
+	Cmd  []string `json:"cmd"`
+	Dir  string   `json:"dir,omitempty"`
+}
+
 // runSplit splits the active pane and wires up the new pane's reader + hooks.
 func (ms *ManagedSession) runSplit(dir session.SplitDir) {
 	tab := ms.Session.CurrentTab()

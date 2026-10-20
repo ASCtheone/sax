@@ -94,7 +94,7 @@ func TestNetUp_PublishAndGateway(t *testing.T) {
 	run := newFakeRunner()
 	env := upEnv + "publish:\n  - 13200 -> api:3200\n"
 	var out bytes.Buffer
-	if err := netUp(&out, s, run, writeEnv(t, env)); err != nil {
+	if err := netUp(&out, s, run, writeEnv(t, env), false); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := s.Get("v1")

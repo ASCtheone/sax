@@ -18,8 +18,10 @@ const netUsage = `usage: sax net                                 list routers
        sax net inspect <router>
        sax net map <router> <pattern> <target>   append a rule (first match wins)
        sax net unmap <router> <pattern>
-       sax net check [-f sax.net.yaml]           validate an env file
-       sax net up [-f sax.net.yaml]              start the env file's sessions
+       sax net check [-f file]                   validate an env file (default: ./.sax.lan)
+       sax net up [-f file] [-d]                 start the apps and open a view with a tab per app
+                                                 (default file: ./.sax.lan)
+                                                 (-d: stay detached; sax -a <router> later)
        sax net down <router> | -f <file>         stop a router's sessions
        sax net publish <router> <host-port> <target>
                                                  forward 127.0.0.1:<host-port> into the router
@@ -83,7 +85,7 @@ func doNet(args []string) {
 	case "unregister":
 		err = netUnregister(os.Stdout, vnetStore(), pos)
 	case "up":
-		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"))
+		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"), wantsAttach(args))
 	case "down":
 		var router string
 		if router, err = routerFromArgs(pos, flagValue(args, "-f")); err == nil {
@@ -248,8 +250,9 @@ func netUnmap(w io.Writer, s vnet.Store, pos []string) error {
 }
 
 func netCheck(w io.Writer, path string) error {
-	if path == "" {
-		path = vnet.EnvFileName
+	path, err := resolveEnvPath(path)
+	if err != nil {
+		return err
 	}
 	e, err := loadEnvFile(path)
 	if err != nil {

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/vnet"
 	"github.com/asc/sax/internal/vnet/shim"
 )
@@ -20,11 +22,13 @@ type launched struct {
 type fakeRunner struct {
 	alive    map[string]bool
 	launched map[string]launched
+	tabs     map[string][]server.TabSpec
+	attached []string
 	killed   []string
 }
 
 func newFakeRunner() *fakeRunner {
-	return &fakeRunner{alive: map[string]bool{}, launched: map[string]launched{}}
+	return &fakeRunner{alive: map[string]bool{}, launched: map[string]launched{}, tabs: map[string][]server.TabSpec{}}
 }
 
 func (f *fakeRunner) Alive(name string) bool { return f.alive[name] }
@@ -33,6 +37,12 @@ func (f *fakeRunner) Launch(name string, command []string, workDir string, env [
 	f.alive[name] = true
 	return nil
 }
+func (f *fakeRunner) LaunchTabs(name string, tabs []server.TabSpec) error {
+	f.tabs[name] = tabs
+	f.alive[name] = true
+	return nil
+}
+func (f *fakeRunner) Attach(name string) { f.attached = append(f.attached, name) }
 func (f *fakeRunner) Kill(name string) {
 	f.killed = append(f.killed, name)
 	delete(f.alive, name)
@@ -84,7 +94,7 @@ func TestNetUp_StartsSessionsWithNetworkEnv(t *testing.T) {
 	path := writeEnv(t, upEnv)
 	var out bytes.Buffer
 
-	if err := netUp(&out, s, run, path); err != nil {
+	if err := netUp(&out, s, run, path, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +128,7 @@ func TestNetUp_StartsSessionsWithNetworkEnv(t *testing.T) {
 	// Second up is idempotent: nothing relaunched, same addresses.
 	run.launched = map[string]launched{}
 	out.Reset()
-	if err := netUp(&out, s, run, path); err != nil {
+	if err := netUp(&out, s, run, path, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(run.launched) != 0 || !strings.Contains(out.String(), "running") {
@@ -132,7 +142,7 @@ func TestNetUp_TwoVersionsSideBySide(t *testing.T) {
 	run := newFakeRunner()
 	var out bytes.Buffer
 	for _, v := range []string{"v1", "v2"} {
-		if err := netUp(&out, s, run, writeEnv(t, strings.Replace(upEnv, "router: v1", "router: "+v, 1))); err != nil {
+		if err := netUp(&out, s, run, writeEnv(t, strings.Replace(upEnv, "router: v1", "router: "+v, 1)), false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,7 +157,7 @@ func TestNetUp_SubnetMismatch(t *testing.T) {
 	s := vnet.NewStore(t.TempDir())
 	r, _ := vnet.NewRouter("v1", "10.99.0.0/24", "")
 	_ = s.Create(r)
-	err := netUp(&bytes.Buffer{}, s, newFakeRunner(), writeEnv(t, upEnv))
+	err := netUp(&bytes.Buffer{}, s, newFakeRunner(), writeEnv(t, upEnv), false)
 	if err == nil || !strings.Contains(err.Error(), "already exists with subnet") {
 		t.Errorf("err = %v", err)
 	}
@@ -161,7 +171,7 @@ func TestNetUp_KeepsHandJoinedSessions(t *testing.T) {
 	if _, _, err := netJoin(s, "debug", "v1:tool", "10.12.12.50"); err != nil {
 		t.Fatal(err)
 	}
-	if err := netUp(&bytes.Buffer{}, s, newFakeRunner(), writeEnv(t, upEnv)); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, newFakeRunner(), writeEnv(t, upEnv), false); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Get("v1")
@@ -176,7 +186,7 @@ func TestNetDownAndRemove(t *testing.T) {
 	run := newFakeRunner()
 	var out bytes.Buffer
 	path := writeEnv(t, upEnv)
-	if err := netUp(&out, s, run, path); err != nil {
+	if err := netUp(&out, s, run, path, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,8 +201,8 @@ func TestNetDownAndRemove(t *testing.T) {
 	if err := netDown(&out, s, run, router); err != nil {
 		t.Fatal(err)
 	}
-	if len(run.killed) != 2 {
-		t.Errorf("killed = %v", run.killed)
+	if !reflect.DeepEqual(run.killed, []string{"v1", "v1.api", "v1.web"}) {
+		t.Errorf("killed = %v, want the view and both apps", run.killed)
 	}
 	r, _ := s.Get("v1")
 	if len(r.Sessions) != 0 || len(r.Rules) != 2 {

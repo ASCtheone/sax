@@ -29,6 +29,10 @@ type Server struct {
 	InitCmdArgs []string
 	InitWorkDir string
 
+	// InitTabs, when set, replaces InitCmd: the session starts with one named
+	// tab per command (sax net up's view of a router).
+	InitTabs []TabSpec
+
 	// LazyStart defers creating the session (and running its command) until
 	// the first client attaches; otherwise it starts with the daemon.
 	LazyStart bool
@@ -190,7 +194,21 @@ func (s *Server) ensureSession(w, h int) (*ManagedSession, error) {
 	if ms := s.sessions.Get(s.name); ms != nil {
 		return ms, nil
 	}
-	return s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir, s.handlePaneExit)
+	if len(s.InitTabs) == 0 {
+		return s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir, s.handlePaneExit)
+	}
+
+	first := s.InitTabs[0]
+	if len(first.Cmd) == 0 {
+		return nil, fmt.Errorf("tab %s: empty command", first.Name)
+	}
+	ms, err := s.sessions.Create(s.name, w, h, first.Cmd[0], first.Cmd[1:], first.Dir, s.handlePaneExit,
+		s.InitTabs[1:]...)
+	if err != nil {
+		return nil, err
+	}
+	ms.Session.Tabs[0].Name = first.Name
+	return ms, nil
 }
 
 // handleQuery responds to a session info query and closes the connection.

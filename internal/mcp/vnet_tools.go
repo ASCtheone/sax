@@ -72,14 +72,14 @@ var netTools = []netTool{
 	},
 	{
 		name: "sax_net_up",
-		description: "Start the environment in a sax.net.yaml file: create/update its router, " +
+		description: "Start the environment in a .sax.lan file: create/update its router, " +
 			"start its sessions and the HTTP gateway. Idempotent.",
-		props: map[string]interface{}{"file": stringProp("Path to the env file (default ./sax.net.yaml)")},
+		props: map[string]interface{}{"file": stringProp("Path to the env file (default ./.sax.lan, or ./sax.net.yaml)")},
 		args: func(p map[string]interface{}) []string {
 			if f := str(p, "file"); f != "" {
-				return []string{"up", "-f", f}
+				return []string{"up", "-d", "-f", f}
 			}
-			return []string{"up"}
+			return []string{"up", "-d"}
 		},
 	},
 	{

@@ -46,6 +46,12 @@ func main() {
 		return
 	}
 
+	// Help: sax -h | --help | help
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+		printUsage()
+		return
+	}
+
 	// Self-update command
 	if len(args) > 0 && args[0] == "update" {
 		force := len(args) > 1 && args[1] == "--force"
@@ -400,11 +406,21 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
        sax nx stop [app]            stop an app (all NX sessions if no app)
        sax nx <app>                 shorthand for sax nx serve <app>
 
-   net: sax net                      list virtual routers (sax net help for more)
-       sax net create <router>      create a router
+   net: sax net up [-f file] [-d]    start the apps of ./.sax.lan (or -f file) and open a view
+                                    with a tab per app (-d: stay detached; later: sax -a <router>)
+       sax net down <router>        stop a router's apps and its view
+       sax net                      list routers (sax net help for every command)
+       sax net inspect <router>     IPs, routes and the URLs to open
+       sax net register [domain]    one sudo: http://<app>.lan in the browser (default: lan)
+       sax net create <router>      create a router by hand
        sax net map <router> <pattern> <target>
                                     add a rule, e.g. bob.lan/api/* api:3200
-       sax net check [-f file]      validate a sax.net.yaml env file`)
+       sax net check [-f file]      validate ./.sax.lan (or -f file)
+       sax -x <name> --net <router> <command...>
+                                    run any session inside a router
+
+detach: Ctrl+S then d (prefix + d). Screen-style Ctrl+A Ctrl+D: put
+       "set prefix C-a" and "bind C-d detach" in ~/.saxrc`)
 }
 
 // --- Actions ---
@@ -1303,6 +1319,7 @@ func doServerMode(name string, command []string, workDir string) {
 	srv := server.NewServer(name)
 	srv.LazyStart = os.Getenv(envLazyStart) != ""
 	os.Unsetenv(envLazyStart) // panes must not inherit it
+	srv.InitTabs = initTabsFromEnv()
 	srv.Saxrc = rc
 	srv.InitWorkDir = workDir
 	// In a vnet router on macOS, keep the shim across SIP binaries (sh -c,
