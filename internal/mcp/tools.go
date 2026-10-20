@@ -315,16 +315,11 @@ func registerTail(s *Server) {
 				n = int(lines)
 			}
 
-			if !ipc.IsSessionAlive(name) {
-				return errorResult(fmt.Sprintf("session %q not found", name))
+			tail, err := ipc.Tail(name, n)
+			if err != nil {
+				return errorResult(err.Error())
 			}
 
-			reply := ipc.QuerySessionTyped(name, "tail", fmt.Sprintf("%d", n))
-			if reply == nil {
-				return errorResult(fmt.Sprintf("failed to query session %q", name))
-			}
-
-			tail, _ := reply["tail"].(string)
 			if tail == "" {
 				return textResult("(empty)")
 			}
@@ -360,19 +355,14 @@ func registerSend(s *Server) {
 				return errorResult("name and text are required")
 			}
 
-			if !ipc.IsSessionAlive(name) {
-				return errorResult(fmt.Sprintf("session %q not found", name))
-			}
-
 			// Interpret \n as actual newlines
 			text = strings.ReplaceAll(text, `\n`, "\n")
 
-			reply := ipc.QuerySessionTyped(name, "send", text)
-			if reply == nil {
-				return errorResult(fmt.Sprintf("failed to send to session %q", name))
+			sent, err := ipc.Send(name, text)
+			if err != nil {
+				return errorResult(err.Error())
 			}
-
-			if ok, _ := reply["ok"].(bool); ok {
+			if sent {
 				return textResult("sent")
 			}
 			return errorResult("send failed")

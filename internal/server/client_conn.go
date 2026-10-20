@@ -131,7 +131,7 @@ func (cc *ClientConn) readLoop() {
 			return
 		}
 
-		cc.dispatch(env)
+		cc.ms.WithLock(func() { cc.dispatch(env) })
 	}
 }
 
@@ -155,23 +155,43 @@ func (cc *ClientConn) renderLoop() {
 
 // sendFrame renders and sends the current frame.
 func (cc *ClientConn) sendFrame() {
+	var frame string
+	var w, h int
+	cc.ms.WithLock(func() { frame, w, h = cc.buildFrame() })
+	if frame == "" {
+		return
+	}
+	cc.writeFrame(frame, w, h)
+}
+
+// frameWriteTimeout bounds how long a stuck client can hold a frame write.
+// A write that fails part-way leaves half a message on the stream, so the
+// connection is closed instead of sending the client garbage.
+const frameWriteTimeout = 5 * time.Second
+
+// writeFrame sends a rendered frame outside the session lock, so a slow
+// client only delays its own frames.
+func (cc *ClientConn) writeFrame(frame string, w, h int) {
+	_ = cc.conn.SetWriteDeadline(time.Now().Add(frameWriteTimeout))
+	err := cc.writer.WriteMsg(MsgFrame, &FrameMsg{Content: frame, W: w, H: h})
+	_ = cc.conn.SetWriteDeadline(time.Time{})
+	if err != nil {
+		log.Printf("client %s: frame write failed (%v); closing the connection", cc.ID, err)
+		cc.Close()
+	}
+}
+
+// buildFrame renders the client's current view. Callers hold the session
+// lock. It returns "" when the client has no size yet.
+func (cc *ClientConn) buildFrame() (string, int, int) {
 	w, h := cc.Size()
 	if w == 0 || h == 0 {
-		return
+		return "", 0, 0
 	}
 
 	// Scrollback overlay mode — show scrollback lines instead of live terminal
 	if cc.scrollMode && cc.scrollOffset > 0 {
-		frame := cc.renderScrollback(w, h)
-		frame = cc.drainClipboardOSC() + frame
-		cc.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-		_ = cc.writer.WriteMsg(MsgFrame, &FrameMsg{
-			Content: frame,
-			W:       w,
-			H:       h,
-		})
-		cc.conn.SetWriteDeadline(time.Time{})
-		return
+		return cc.drainClipboardOSC() + cc.renderScrollback(w, h), w, h
 	}
 
 	var mode statusbar.Mode
@@ -203,17 +223,7 @@ func (cc *ClientConn) sendFrame() {
 		ctx.WindowListOverlay = renderWindowList(cc.ms.Session, w, h)
 	}
 
-	frame := RenderFrame(ctx)
-	frame = cc.drainClipboardOSC() + frame
-
-	// Set write deadline to prevent slow client from blocking
-	cc.conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-	_ = cc.writer.WriteMsg(MsgFrame, &FrameMsg{
-		Content: frame,
-		W:       w,
-		H:       h,
-	})
-	cc.conn.SetWriteDeadline(time.Time{})
+	return cc.drainClipboardOSC() + RenderFrame(ctx), w, h
 }
 
 // drainClipboardOSC returns the pending OSC 52 sequence (if any) and

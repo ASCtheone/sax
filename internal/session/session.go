@@ -70,17 +70,38 @@ func (s *Session) AddTab() (*Tab, error) {
 	return tab, nil
 }
 
-// AddCommandTab adds a named tab running a command, keeping the current tab
-// focused (used to build multi-tab sessions up front).
-func (s *Session) AddCommandTab(name, cmd string, args []string, workDir string) (*Tab, error) {
+// AddCommandTab adds a named tab running a command (with extra environment
+// for its process), keeping the current tab focused.
+func (s *Session) AddCommandTab(name, cmd string, args []string, workDir string, env []string) (*Tab, error) {
 	cols, rows := s.PaneArea()
-	tab, err := NewTabWithCommand(cols, rows, cmd, args, workDir)
+	tab, err := NewTabWithCommandEnv(cols, rows, cmd, args, workDir, env)
 	if err != nil {
 		return nil, err
 	}
 	tab.Name = name
 	s.Tabs = append(s.Tabs, tab)
 	return tab, nil
+}
+
+// NewSessionWithTab creates a session whose first tab is named and runs a
+// command with extra environment.
+func NewSessionWithTab(cols, rows int, tabName, cmd string, args []string, workDir string, env []string) (*Session, error) {
+	tab, err := NewTabWithCommandEnv(cols, rows, cmd, args, workDir, env)
+	if err != nil {
+		return nil, err
+	}
+	tab.Name = tabName
+	return &Session{Tabs: []*Tab{tab}, Width: cols, Height: rows}, nil
+}
+
+// TabByName returns the tab with the given name, or nil.
+func (s *Session) TabByName(name string) *Tab {
+	for _, t := range s.Tabs {
+		if t.Name == name {
+			return t
+		}
+	}
+	return nil
 }
 
 // RemoveTab removes the tab at the given index.

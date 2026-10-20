@@ -20,11 +20,12 @@ type launched struct {
 }
 
 type fakeRunner struct {
-	alive    map[string]bool
-	launched map[string]launched
-	tabs     map[string][]server.TabSpec
-	attached []string
-	killed   []string
+	addTabErr error
+	alive     map[string]bool
+	launched  map[string]launched
+	tabs      map[string][]server.TabSpec
+	attached  []string
+	killed    []string
 }
 
 func newFakeRunner() *fakeRunner {
@@ -41,6 +42,18 @@ func (f *fakeRunner) LaunchTabs(name string, tabs []server.TabSpec) error {
 	f.tabs[name] = tabs
 	f.alive[name] = true
 	return nil
+}
+func (f *fakeRunner) AddTab(name string, tab server.TabSpec) (bool, error) {
+	if f.addTabErr != nil {
+		return false, f.addTabErr
+	}
+	for _, t := range f.tabs[name] {
+		if t.Name == tab.Name {
+			return true, nil
+		}
+	}
+	f.tabs[name] = append(f.tabs[name], tab)
+	return false, nil
 }
 func (f *fakeRunner) Attach(name string) { f.attached = append(f.attached, name) }
 func (f *fakeRunner) Kill(name string) {
@@ -86,7 +99,28 @@ func writeEnv(t *testing.T, content string) string {
 	return path
 }
 
-func TestNetUp_StartsSessionsWithNetworkEnv(t *testing.T) {
+// tabOf returns the spec of an app tab in the router's session.
+func tabOf(t *testing.T, run *fakeRunner, session, app string) server.TabSpec {
+	t.Helper()
+	for _, tab := range run.tabs[session] {
+		if tab.Name == app {
+			return tab
+		}
+	}
+	t.Fatalf("no tab %q in session %q (tabs: %+v)", app, session, run.tabs[session])
+	return server.TabSpec{}
+}
+
+func tabEnv(tab server.TabSpec) map[string]string {
+	m := map[string]string{}
+	for _, kv := range tab.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		m[k] = v
+	}
+	return m
+}
+
+func TestNetUp_RunsAppsAsTabsWithNetworkEnv(t *testing.T) {
 	fakeShim(t)
 	t.Setenv("SHELL", "/bin/zsh")
 	s := vnet.NewStore(t.TempDir())
@@ -97,42 +131,43 @@ func TestNetUp_StartsSessionsWithNetworkEnv(t *testing.T) {
 	if err := netUp(&out, s, run, path, false); err != nil {
 		t.Fatal(err)
 	}
-
-	api, ok := run.launched["v1.api"]
-	if !ok {
-		t.Fatalf("v1.api not launched; launched = %v", run.launched)
+	if len(run.launched) != 0 && run.launched["v1.api"].command != nil {
+		t.Errorf("apps must not get their own sessions anymore: %v", run.launched)
 	}
-	env := envOf(api)
+
+	api := tabOf(t, run, "v1", "api")
+	env := tabEnv(api)
 	if env[vnet.EnvIP] != "10.12.12.4" || env[vnet.EnvHost] != "api" || env[vnet.EnvShim] != "/s/lib.dylib" {
 		t.Errorf("api env = %v", env)
 	}
 	if env["NODE_ENV"] != "development" {
 		t.Error("session env from the file not passed")
 	}
-	if api.workDir != filepath.Join(filepath.Dir(path), "api") {
-		t.Errorf("workDir = %s", api.workDir)
+	if api.Dir != filepath.Join(filepath.Dir(path), "api") {
+		t.Errorf("dir = %s", api.Dir)
 	}
-	wantCmd := []string{"/bin/zsh", "-c", "npm run start:dev"}
-	if strings.Join(api.command, "|") != strings.Join(wantCmd, "|") {
-		t.Errorf("command = %q", api.command)
+	if api.Input != "npm run start:dev" || api.Cmd[len(api.Cmd)-1] != "/bin/zsh" {
+		t.Errorf("tab = cmd %q input %q; want an interactive shell with the app command typed in", api.Cmd, api.Input)
 	}
 
 	r, _ := s.Get("v1")
-	if r.Sessions["web"] != "10.12.12.2" || r.Owners["web"] != "v1.web" || len(r.Rules) != 2 {
+	if r.Sessions["web"] != "10.12.12.2" || r.Owners["web"] != "v1" || r.View != "v1" || len(r.Rules) != 2 {
 		t.Errorf("router after up = %+v", r)
 	}
-	if !strings.Contains(out.String(), "api      10.12.12.4  v1.api       started") {
+	if !strings.Contains(out.String(), "api  10.12.12.4  started") || !strings.Contains(out.String(), "sax -a v1") {
 		t.Errorf("output:\n%s", out.String())
 	}
 
-	// Second up is idempotent: nothing relaunched, same addresses.
-	run.launched = map[string]launched{}
+	// Second up: the session is running, so apps are kept, not restarted.
 	out.Reset()
 	if err := netUp(&out, s, run, path, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(run.launched) != 0 || !strings.Contains(out.String(), "running") {
-		t.Errorf("second up relaunched %v\n%s", run.launched, out.String())
+	if len(run.tabs["v1"]) != 2 || !strings.Contains(out.String(), "api  10.12.12.4  running") {
+		t.Errorf("second up: tabs %d\n%s", len(run.tabs["v1"]), out.String())
+	}
+	if len(run.killed) != 0 {
+		t.Errorf("second up killed %v", run.killed)
 	}
 }
 
@@ -146,7 +181,7 @@ func TestNetUp_TwoVersionsSideBySide(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	a1, a2 := envOf(run.launched["v1.api"]), envOf(run.launched["v2.api"])
+	a1, a2 := tabEnv(tabOf(t, run, "v1", "api")), tabEnv(tabOf(t, run, "v2", "api"))
 	if a1[vnet.EnvIP] != a2[vnet.EnvIP] || a1[vnet.EnvDir] == a2[vnet.EnvDir] {
 		t.Errorf("same IP expected in separate routers: %v vs %v", a1, a2)
 	}
@@ -201,8 +236,8 @@ func TestNetDownAndRemove(t *testing.T) {
 	if err := netDown(&out, s, run, router); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(run.killed, []string{"v1", "v1.api", "v1.web"}) {
-		t.Errorf("killed = %v, want the view and both apps", run.killed)
+	if !reflect.DeepEqual(run.killed, []string{"v1"}) {
+		t.Errorf("killed = %v, want the router's session (its tabs are the apps)", run.killed)
 	}
 	r, _ := s.Get("v1")
 	if len(r.Sessions) != 0 || len(r.Rules) != 2 {

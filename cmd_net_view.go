@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,55 +47,50 @@ func wantsAttach(args []string) bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// viewTabs builds one tab per running session of the router; each tab is a
-// sax client attached to that session (sax in sax).
-func viewTabs(r vnet.Router, run sessionRunner, exe string) []server.TabSpec {
-	var tabs []server.TabSpec
-	for _, host := range r.SortedSessions() {
-		owner, ok := r.Owners[host]
-		if !ok || !run.Alive(owner) {
-			continue
-		}
-		tabs = append(tabs, server.TabSpec{Name: host, Cmd: []string{exe, "-a", owner}})
-	}
-	return tabs
-}
-
-// startView (re)creates the router's view session: a session named after
-// the router with one tab per app. It never replaces a session it did not
-// create.
-func startView(w io.Writer, s vnet.Store, run sessionRunner, routerName string) (string, error) {
-	r, err := s.Get(routerName)
-	if err != nil {
-		return "", err
+// startView runs the router's apps as tabs of one session named after the
+// router: it starts the session, or adds tabs for apps it does not have yet
+// (running apps are left alone). It never touches a session of that name it
+// did not create. Returns each app's status ("started" or "running").
+func startView(s vnet.Store, run sessionRunner, r vnet.Router, tabs []server.TabSpec) (map[string]string, error) {
+	status := make(map[string]string, len(tabs))
+	if len(tabs) == 0 {
+		return status, nil
 	}
 	name := r.Name
 	if run.Alive(name) {
 		if r.View != name {
-			return "", fmt.Errorf("a session named %q already exists and is not this router's view; "+
-				"rename it or use -d", name)
+			return nil, fmt.Errorf("a session named %q already exists and was not started by sax net up; "+
+				"rename it or stop it first", name)
 		}
-		run.Kill(name) // rebuild so the tabs match the current apps
+		replaced := false
+		for _, tab := range tabs {
+			existed, err := run.AddTab(name, tab)
+			if errors.Is(err, errAddTabUnsupported) {
+				run.Kill(name) // an older view: replace it with app tabs
+				replaced = true
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			status[tab.Name] = "started"
+			if existed {
+				status[tab.Name] = "running"
+			}
+		}
+		if !replaced {
+			return status, nil
+		}
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("start view: %w", err)
-	}
-	tabs := viewTabs(r, run, exe)
-	if len(tabs) == 0 {
-		return "", nil
-	}
+
 	if err := run.LaunchTabs(name, tabs); err != nil {
-		return "", fmt.Errorf("start view: %w", err)
+		return nil, fmt.Errorf("start %s: %w", name, err)
 	}
-	if _, err := s.Update(r.Name, func(cur vnet.Router) (vnet.Router, error) {
-		next := cur.WithView(name)
-		return next, nil
-	}); err != nil {
-		return "", err
+	for _, tab := range tabs {
+		status[tab.Name] = "started"
 	}
-	fmt.Fprintf(w, "view: sax -a %s (one tab per app; Ctrl+S d to detach)\n", name)
-	return name, nil
+	_, err := s.Update(r.Name, func(cur vnet.Router) (vnet.Router, error) { return cur.WithView(name), nil })
+	return status, err
 }
 
 // stopView closes the router's view session, if sax created one.
