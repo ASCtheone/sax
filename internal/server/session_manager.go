@@ -31,6 +31,11 @@ type ManagedSession struct {
 
 	onPaneExit func(paneID string)
 
+	// sessMu guards the session structure (tabs, panes, layout, active tab):
+	// client input, rendering, pane exits and queries take it for writing,
+	// pane readers for reading. Pane contents have their own locking.
+	sessMu sync.RWMutex
+
 	// newPaneHooks are shell commands (from ~/.saxrc "hook new-pane") typed
 	// into every newly spawned pane.
 	newPaneHooks []string
@@ -64,11 +69,12 @@ func (sm *SessionManager) ConfigureHooks(newPaneHooks, runCmds []string) {
 // Create creates a new named session. If cmdName is non-empty, the initial
 // pane runs that command instead of the default shell.
 // Create starts a session. onPaneExit is installed before any pane reader
-// runs, so a command that exits immediately is never missed. extraTabs are
-// added (named, running their commands) before the readers start too, so
-// nothing reads the session while it is being built.
+// runs, so a command that exits immediately is never missed. With tabs, the
+// session is built from them instead of cmdName (one named tab each, with
+// its own environment), before any reader starts, so nothing reads the
+// session while it is being built.
 func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs []string, workDir string,
-	onPaneExit func(paneID string), extraTabs ...TabSpec) (*ManagedSession, error) {
+	onPaneExit func(paneID string), tabs ...TabSpec) (*ManagedSession, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -79,22 +85,16 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 	paneH := h - 2 // subtract tab bar + status bar
 	var sess *session.Session
 	var err error
-	if cmdName != "" {
+	switch {
+	case len(tabs) > 0:
+		sess, err = newSessionFromTabs(w, paneH, tabs)
+	case cmdName != "":
 		sess, err = session.NewSessionWithCommand(w, paneH, cmdName, cmdArgs, workDir)
-	} else {
+	default:
 		sess, err = session.NewSession(w, paneH, workDir)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
-	}
-	for _, spec := range extraTabs {
-		if len(spec.Cmd) == 0 {
-			continue
-		}
-		if _, err := sess.AddCommandTab(spec.Name, spec.Cmd[0], spec.Cmd[1:], spec.Dir); err != nil {
-			sess.Close()
-			return nil, fmt.Errorf("create tab %s: %w", spec.Name, err)
-		}
 	}
 
 	alertCh := make(chan monitor.Alert, 16)
@@ -123,12 +123,16 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 		for _, p := range ports {
 			pi = append(pi, statusbar.PortInfo{Port: p.Port, Process: p.Process})
 		}
-		ms.Ports = pi
+		ms.WithLock(func() { ms.Ports = pi })
 		ms.broadcastEvent(EventPortUpdate, "")
 	})
 	ms.Tracker.Start()
 
 	sm.sessions[name] = ms
+
+	// Readers start now; hold the lock until the session is fully built.
+	ms.sessMu.Lock()
+	defer ms.sessMu.Unlock()
 
 	// Start PTY readers for initial panes and apply new-pane hooks.
 	for _, pane := range sess.AllPanes() {
@@ -138,8 +142,41 @@ func (sm *SessionManager) Create(name string, w, h int, cmdName string, cmdArgs 
 
 	// Apply "run" startup layout commands from ~/.saxrc.
 	ms.applyRunCmds(sm.runCmds)
+	for i, spec := range tabs {
+		if i < len(sess.Tabs) {
+			ms.typeInput(sess.Tabs[i].ActivePaneObj(), spec.Input)
+		}
+	}
 
 	return ms, nil
+}
+
+// newSessionFromTabs builds a session with one named tab per spec.
+func newSessionFromTabs(cols, rows int, tabs []TabSpec) (*session.Session, error) {
+	for _, t := range tabs {
+		if len(t.Cmd) == 0 {
+			return nil, fmt.Errorf("tab %s: empty command", t.Name)
+		}
+	}
+	first := tabs[0]
+	sess, err := session.NewSessionWithTab(cols, rows, first.Name, first.Cmd[0], first.Cmd[1:], first.Dir, first.Env)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tabs[1:] {
+		if _, err := sess.AddCommandTab(t.Name, t.Cmd[0], t.Cmd[1:], t.Dir, t.Env); err != nil {
+			sess.Close()
+			return nil, fmt.Errorf("create tab %s: %w", t.Name, err)
+		}
+	}
+	return sess, nil
+}
+
+// WithLock runs fn with exclusive access to the session structure.
+func (ms *ManagedSession) WithLock(fn func()) {
+	ms.sessMu.Lock()
+	defer ms.sessMu.Unlock()
+	fn()
 }
 
 // Get returns a session by name.
@@ -338,8 +375,10 @@ func (ms *ManagedSession) startPaneReader(pane *session.Pane) {
 
 				// Notify monitor (check if pane is in background)
 				if ms.Monitor != nil {
+					ms.sessMu.RLock()
 					activePane := ms.Session.ActivePane()
 					isBackground := activePane == nil || activePane.ID != pane.ID
+					ms.sessMu.RUnlock()
 					ms.Monitor.NotifyActivity(pane.ID, isBackground)
 				}
 

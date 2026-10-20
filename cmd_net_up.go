@@ -1,14 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
+	"github.com/asc/sax/internal/ipc"
 	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/vnet"
 	"github.com/asc/sax/internal/vnet/shim"
@@ -24,6 +27,9 @@ type sessionRunner interface {
 	Launch(name string, command []string, workDir string, env []string) error
 	// LaunchTabs starts a session with one named tab per command.
 	LaunchTabs(name string, tabs []server.TabSpec) error
+	// AddTab adds a tab to a running session unless one with that name
+	// exists (existed reports which).
+	AddTab(name string, tab server.TabSpec) (existed bool, err error)
 	// Attach opens the session in this terminal until the user detaches.
 	Attach(name string)
 	Kill(name string)
@@ -48,8 +54,31 @@ func (r daemonRunner) LaunchTabs(name string, tabs []server.TabSpec) error {
 	}
 	return r.Launch(name, nil, "", []string{env})
 }
+func (daemonRunner) AddTab(name string, tab server.TabSpec) (bool, error) {
+	data, err := json.Marshal(tab)
+	if err != nil {
+		return false, fmt.Errorf("encode tab: %w", err)
+	}
+	reply := ipc.QuerySessionTyped(name, "addtab", string(data))
+	if reply == nil {
+		return false, fmt.Errorf("session %q did not answer", name)
+	}
+	if _, understood := reply["ok"]; !understood {
+		return false, errAddTabUnsupported // a session from an older sax
+	}
+	if ok, _ := reply["ok"].(bool); !ok {
+		msg, _ := reply["error"].(string)
+		return false, fmt.Errorf("add tab %s: %s", tab.Name, msg)
+	}
+	existed, _ := reply["existed"].(bool)
+	return existed, nil
+}
 func (daemonRunner) Attach(name string) { connectClient(name) }
 func (daemonRunner) Kill(name string)   { killSessionQuiet(name) }
+
+// errAddTabUnsupported means the session predates adding tabs over IPC
+// (e.g. a v1.6 view whose tabs were nested sax clients).
+var errAddTabUnsupported = errors.New("session cannot add tabs")
 
 // installShim is swapped in tests to avoid compiling the C shim.
 var installShim = func() (shim.Paths, error) {
@@ -114,7 +143,8 @@ func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, 
 
 // netUp brings up the environment described by an env file: it creates or
 // updates the router (the file is the source of truth for domain and routes)
-// and starts every session that is not already running.
+// and runs every app as a tab of the router's session, adding tabs for apps
+// that are not running yet. With attach it then opens that session.
 func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string, attach bool) error {
 	e, err := loadEnvFile(path)
 	if err != nil {
@@ -131,24 +161,25 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string, attach boo
 	if w := supervisionWarning(paths); w != "" {
 		warnings = append(warnings, w)
 	}
-	r, err := applyPlan(s, plan)
+	stopLegacyApps(w, s, run, plan)
+	r, err := applyPlan(s, plan, explicitIPs(e))
+	if err != nil {
+		return err
+	}
+
+	tabs := make([]server.TabSpec, 0, len(e.Sessions))
+	for _, host := range e.SessionNames() {
+		tabs = append(tabs, appTab(s, r, paths, host, e.Sessions[host]))
+	}
+	status, err := startView(s, run, r, tabs)
 	if err != nil {
 		return err
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SESSION\tIP\tSAX SESSION\tSTATUS")
+	fmt.Fprintln(tw, "APP\tIP\tSTATUS")
 	for _, host := range e.SessionNames() {
-		saxName := vnet.SessionName(r.Name, host)
-		status := "running"
-		if !run.Alive(saxName) {
-			if err := startEnvSession(run, s, r, paths, host, saxName, e.Sessions[host]); err != nil {
-				_ = tw.Flush()
-				return fmt.Errorf("start %s: %w", saxName, err)
-			}
-			status = "started"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", host, r.Sessions[host], saxName, status)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", host, r.Sessions[host], status[host])
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -158,14 +189,63 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string, attach boo
 	if err := ensureGateway(w, s, run); err != nil {
 		return err
 	}
-	view, err := startView(w, s, run, r.Name)
-	if err != nil {
-		return err
-	}
-	if attach && view != "" {
-		run.Attach(view)
+	fmt.Fprintf(w, "session %s: one tab per app (Ctrl+S n/p or 1-9 to switch, Ctrl+S d to detach; "+
+		"later: sax -a %s)\n", r.Name, r.Name)
+	if attach {
+		run.Attach(r.Name)
 	}
 	return nil
+}
+
+// appTab is an app's tab: an interactive shell inside the app's network with
+// the app command typed in, so Ctrl+C stops the app but keeps the tab (and
+// its output), and Up+Enter starts it again.
+func appTab(s vnet.Store, r vnet.Router, paths shim.Paths, host string, spec vnet.SessionSpec) server.TabSpec {
+	m := vnet.Member{Router: r.Name, Host: host, IP: r.Sessions[host], Subnet: r.Subnet, Dir: s.RouterDir(r.Name)}
+	env := vnet.DaemonEnv(m, paths)
+	keys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		env = append(env, k+"="+spec.Env[k])
+	}
+
+	vars := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		vars[k] = v
+	}
+	getenv := func(k string) string {
+		if v, ok := vars[k]; ok {
+			return v
+		}
+		return os.Getenv(k) // the user's own NODE_OPTIONS, ZDOTDIR, ...
+	}
+	env = append(env, vnet.PaneEnv(getenv)...)
+
+	cmd := []string{userShell()}
+	if wrapper := vnet.PaneWrapper(getenv); wrapper != nil {
+		cmd = append(append([]string{}, wrapper...), cmd...)
+	}
+	return server.TabSpec{Name: host, Cmd: cmd, Dir: spec.Cwd, Env: env, Input: spec.Cmd}
+}
+
+// stopLegacyApps stops per-app sessions started by sax v1.6 ("<router>.<app>"),
+// which the router's tabs now replace.
+func stopLegacyApps(w io.Writer, s vnet.Store, run sessionRunner, plan vnet.Router) {
+	cur, err := s.Get(plan.Name)
+	if err != nil {
+		return
+	}
+	for _, host := range cur.SortedSessions() {
+		owner := cur.Owners[host]
+		if owner == vnet.SessionName(cur.Name, host) && run.Alive(owner) {
+			run.Kill(owner)
+			fmt.Fprintf(w, "stopped %s (apps now run as tabs of %s)\n", owner, cur.Name)
+		}
+	}
 }
 
 // resolveEnvPath returns path, or the default env file of the current
@@ -189,9 +269,22 @@ func loadEnvFile(path string) (vnet.EnvFile, error) {
 	return e, err
 }
 
+// explicitIPs lists the apps whose address the env file fixes with ip:.
+func explicitIPs(e vnet.EnvFile) map[string]bool {
+	out := map[string]bool{}
+	for host, spec := range e.Sessions {
+		if spec.IP != "" {
+			out[host] = true
+		}
+	}
+	return out
+}
+
 // applyPlan creates the router if needed and makes its domain, sessions and
-// rules match the plan, keeping sessions that joined by hand.
-func applyPlan(s vnet.Store, plan vnet.Router) (vnet.Router, error) {
+// rules match the plan, keeping sessions that joined by hand. Apps that
+// already have an address keep it unless the file fixes another one, so
+// adding an app never moves running ones.
+func applyPlan(s vnet.Store, plan vnet.Router, explicit map[string]bool) (vnet.Router, error) {
 	if _, err := s.Get(plan.Name); errors.Is(err, vnet.ErrNotFound) {
 		fresh, err := vnet.NewRouter(plan.Name, plan.Subnet, plan.Domain)
 		if err != nil {
@@ -225,11 +318,36 @@ func applyPlan(s vnet.Store, plan vnet.Router) (vnet.Router, error) {
 				next = next.WithOwner(host, owner)
 			}
 		}
-		for _, host := range plan.SortedSessions() {
-			if next, _, err = next.WithSession(host, plan.Sessions[host]); err != nil {
-				return cur, fmt.Errorf("session %s: %w", host, err)
+		// Fixed addresses first, then the ones apps already have, then new apps.
+		hosts := plan.SortedSessions()
+		place := func(host, ip string) error {
+			var err error
+			if next, _, err = next.WithSession(host, ip); err != nil {
+				return fmt.Errorf("session %s: %w", host, err)
 			}
-			next = next.WithOwner(host, vnet.SessionName(cur.Name, host))
+			next = next.WithOwner(host, cur.Name) // a tab of the router's session
+			return nil
+		}
+		for _, host := range hosts {
+			if explicit[host] {
+				if err := place(host, plan.Sessions[host]); err != nil {
+					return cur, err
+				}
+			}
+		}
+		for _, host := range hosts {
+			if ip, had := cur.Sessions[host]; had && !explicit[host] {
+				if err := place(host, ip); err != nil {
+					return cur, err
+				}
+			}
+		}
+		for _, host := range hosts {
+			if _, placed := next.Sessions[host]; !placed {
+				if err := place(host, ""); err != nil {
+					return cur, err
+				}
+			}
 		}
 		for _, raw := range plan.Rules {
 			if next, err = next.WithRule(raw); err != nil {
@@ -243,25 +361,6 @@ func applyPlan(s vnet.Store, plan vnet.Router) (vnet.Router, error) {
 		}
 		return next, nil
 	})
-}
-
-func startEnvSession(run sessionRunner, s vnet.Store, r vnet.Router, paths shim.Paths,
-	host, saxName string, spec vnet.SessionSpec) error {
-	m := vnet.Member{Router: r.Name, Host: host, IP: r.Sessions[host], Subnet: r.Subnet, Dir: s.RouterDir(r.Name)}
-	env := vnet.DaemonEnv(m, paths)
-	keys := make([]string, 0, len(spec.Env))
-	for k := range spec.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		env = append(env, k+"="+spec.Env[k])
-	}
-
-	// The command runs through the user's shell; on macOS the daemon
-	// re-exports the shim inside it (vnet.LaunderCommand).
-	command := []string{userShell(), "-c", spec.Cmd}
-	return run.Launch(saxName, command, spec.Cwd, env)
 }
 
 func userShell() string {
@@ -285,9 +384,12 @@ func netDown(w io.Writer, s vnet.Store, run sessionRunner, routerName string) er
 		return err
 	}
 	hosts := r.SortedSessions()
+	stopped := map[string]bool{}
 	for _, host := range hosts {
-		if owner, ok := r.Owners[host]; ok && run.Alive(owner) {
+		owner, ok := r.Owners[host]
+		if ok && !stopped[owner] && run.Alive(owner) {
 			run.Kill(owner)
+			stopped[owner] = true
 			fmt.Fprintf(w, "stopped %s\n", owner)
 		}
 	}

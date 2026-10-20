@@ -43,7 +43,13 @@ func NewTab(cols, rows int, workDir string) (*Tab, error) {
 
 // NewTabWithCommand creates a new tab running a specific command.
 func NewTabWithCommand(cols, rows int, cmdName string, args []string, workDir string) (*Tab, error) {
-	pane, err := NewPaneWithCommand(cols, rows, cmdName, args, workDir)
+	return NewTabWithCommandEnv(cols, rows, cmdName, args, workDir, nil)
+}
+
+// NewTabWithCommandEnv is NewTabWithCommand with extra environment for the
+// tab's process.
+func NewTabWithCommandEnv(cols, rows int, cmdName string, args []string, workDir string, env []string) (*Tab, error) {
+	pane, err := NewPaneWithCommandEnv(cols, rows, cmdName, args, workDir, env)
 	if err != nil {
 		return nil, err
 	}

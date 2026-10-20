@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -171,7 +172,7 @@ func (s *Server) handleClient(conn net.Conn) {
 	ms.AddClient(cc)
 
 	// Send initial snapshot
-	cc.handleAttach(attach)
+	ms.WithLock(func() { cc.handleAttach(attach) })
 
 	// Start read/render loops (blocks until client disconnects)
 	cc.Run()
@@ -198,17 +199,7 @@ func (s *Server) ensureSession(w, h int) (*ManagedSession, error) {
 		return s.sessions.Create(s.name, w, h, s.InitCmd, s.InitCmdArgs, s.InitWorkDir, s.handlePaneExit)
 	}
 
-	first := s.InitTabs[0]
-	if len(first.Cmd) == 0 {
-		return nil, fmt.Errorf("tab %s: empty command", first.Name)
-	}
-	ms, err := s.sessions.Create(s.name, w, h, first.Cmd[0], first.Cmd[1:], first.Dir, s.handlePaneExit,
-		s.InitTabs[1:]...)
-	if err != nil {
-		return nil, err
-	}
-	ms.Session.Tabs[0].Name = first.Name
-	return ms, nil
+	return s.sessions.Create(s.name, w, h, "", nil, "", s.handlePaneExit, s.InitTabs...)
 }
 
 // handleQuery responds to a session info query and closes the connection.
@@ -216,12 +207,21 @@ func (s *Server) handleQuery(conn net.Conn, query QueryMsg) {
 	defer conn.Close()
 
 	ms := s.sessions.Get(s.name)
+	if ms != nil {
+		ms.sessMu.Lock()
+		defer ms.sessMu.Unlock()
+	}
 
 	switch query.Type {
 	case "tail":
 		s.handleQueryTail(conn, ms, query.Args)
 	case "send":
 		s.handleQuerySend(conn, ms, query.Args)
+	case "sendtab":
+		tab, text, _ := strings.Cut(query.Args, "\t")
+		s.sendToPane(conn, ms, tab, text)
+	case "addtab":
+		s.handleQueryAddTab(conn, ms, query.Args)
 	case "status":
 		s.handleQueryStatus(conn, ms)
 	default:
@@ -244,8 +244,9 @@ func (s *Server) handleQuery(conn net.Conn, query QueryMsg) {
 // handleQueryTail returns the last N lines from the active pane.
 func (s *Server) handleQueryTail(conn net.Conn, ms *ManagedSession, args string) {
 	n := 10
-	if args != "" {
-		fmt.Sscanf(args, "%d", &n)
+	countArg, tabName, _ := strings.Cut(args, "\t") // "N" or "N<TAB>tab"
+	if countArg != "" {
+		fmt.Sscanf(countArg, "%d", &n)
 	}
 	if n < 1 {
 		n = 1
@@ -256,7 +257,7 @@ func (s *Server) handleQueryTail(conn net.Conn, ms *ManagedSession, args string)
 
 	content := ""
 	if ms != nil {
-		if pane := ms.Session.ActivePane(); pane != nil {
+		if pane := ms.paneFor(tabName); pane != nil {
 			content = tailLines(pane.Render(), n)
 		}
 	}
@@ -282,9 +283,34 @@ func tailLines(rendered string, n int) string {
 
 // handleQuerySend writes text into the active pane's PTY.
 func (s *Server) handleQuerySend(conn net.Conn, ms *ManagedSession, text string) {
+	s.sendToPane(conn, ms, "", text)
+}
+
+// handleQueryAddTab adds a tab described by JSON args unless it exists.
+func (s *Server) handleQueryAddTab(conn net.Conn, ms *ManagedSession, args string) {
+	reply := map[string]interface{}{"ok": false}
+	var spec TabSpec
+	switch err := json.Unmarshal([]byte(args), &spec); {
+	case ms == nil:
+		reply["error"] = "session not started"
+	case err != nil:
+		reply["error"] = err.Error()
+	default:
+		existed, err := ms.addTab(spec)
+		if err != nil {
+			reply["error"] = err.Error()
+		} else {
+			reply["ok"], reply["existed"] = true, existed
+		}
+	}
+	_ = WriteMsg(conn, MsgQueryReply, &reply)
+}
+
+// sendToPane writes text into a tab's pane ("" = the active one).
+func (s *Server) sendToPane(conn net.Conn, ms *ManagedSession, tab, text string) {
 	ok := false
 	if ms != nil {
-		pane := ms.Session.ActivePane()
+		pane := ms.paneFor(tab)
 		if pane != nil && !pane.HasExited {
 			_, err := pane.Pty.Write([]byte(text))
 			ok = err == nil
@@ -346,22 +372,25 @@ func (s *Server) handlePaneExit(paneID string) {
 		return
 	}
 
+	ms.sessMu.Lock()
 	sess := ms.Session
 	tabIdx := sess.FindPaneTab(paneID)
 	if tabIdx < 0 {
+		ms.sessMu.Unlock()
 		return
 	}
-
 	tab := sess.Tabs[tabIdx]
-	alive := tab.RemovePane(paneID)
-	if !alive {
+	if !tab.RemovePane(paneID) {
 		sess.RemoveTab(tabIdx)
-		if len(sess.Tabs) == 0 {
-			// All panes closed — shut down
-			ms.broadcastEvent(EventSessionClosed, "")
-			s.Shutdown()
-			return
-		}
+	}
+	empty := len(sess.Tabs) == 0
+	ms.sessMu.Unlock() // Shutdown waits for clients, which need the lock
+
+	if empty {
+		// All panes closed — shut down
+		ms.broadcastEvent(EventSessionClosed, "")
+		s.Shutdown()
+		return
 	}
 	ms.MarkDirty()
 }

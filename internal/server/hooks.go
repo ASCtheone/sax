@@ -59,11 +59,62 @@ func (ms *ManagedSession) applyRunCmds(cmds []string) {
 	}
 }
 
-// TabSpec describes a tab created when a session starts.
+// TabSpec describes a named tab: its command, folder, extra environment for
+// its process, and Input typed into it once it has started (e.g. the app
+// command, typed into an interactive shell so the tab outlives it).
 type TabSpec struct {
-	Name string   `json:"name"`
-	Cmd  []string `json:"cmd"`
-	Dir  string   `json:"dir,omitempty"`
+	Name  string   `json:"name"`
+	Cmd   []string `json:"cmd"`
+	Dir   string   `json:"dir,omitempty"`
+	Env   []string `json:"env,omitempty"`
+	Input string   `json:"input,omitempty"`
+}
+
+// typeInput types input (plus Enter) into a freshly started pane once its
+// shell is ready.
+func (ms *ManagedSession) typeInput(pane *session.Pane, input string) {
+	if pane == nil || input == "" {
+		return
+	}
+	go func() {
+		time.Sleep(newPaneHookDelay)
+		if !pane.HasExited {
+			_, _ = pane.Pty.WriteString(input + "\r")
+		}
+	}()
+}
+
+// addTab adds a tab to a running session unless one with that name exists.
+func (ms *ManagedSession) addTab(spec TabSpec) (existed bool, err error) {
+	if ms.Session.TabByName(spec.Name) != nil {
+		return true, nil
+	}
+	if len(spec.Cmd) == 0 {
+		return false, fmt.Errorf("tab %s: empty command", spec.Name)
+	}
+	tab, err := ms.Session.AddCommandTab(spec.Name, spec.Cmd[0], spec.Cmd[1:], spec.Dir, spec.Env)
+	if err != nil {
+		return false, err
+	}
+	for _, pane := range tab.Panes {
+		ms.startPaneReader(pane)
+		ms.applyNewPaneHooks(pane)
+	}
+	ms.typeInput(tab.ActivePaneObj(), spec.Input)
+	ms.MarkDirty()
+	return false, nil
+}
+
+// paneFor returns the active pane of the named tab, or of the current tab
+// when name is "".
+func (ms *ManagedSession) paneFor(tabName string) *session.Pane {
+	if tabName == "" {
+		return ms.Session.ActivePane()
+	}
+	if t := ms.Session.TabByName(tabName); t != nil {
+		return t.ActivePaneObj()
+	}
+	return nil
 }
 
 // runSplit splits the active pane and wires up the new pane's reader + hooks.

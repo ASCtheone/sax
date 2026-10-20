@@ -102,3 +102,62 @@ func TestEnsureSession_InitTabs(t *testing.T) {
 	}
 	t.Error("second tab's command never ran")
 }
+
+func waitRender(t *testing.T, pane interface{ Render() string }, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(pane.Render(), want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("pane never showed %q:\n%s", want, pane.Render())
+}
+
+// The net-up view: each tab is a shell with its own env, the app command is
+// typed in, and tabs can be added, tailed and written to by name.
+func TestTabsWithEnvInputAndQueries(t *testing.T) {
+	s := NewServer("tabs-env-test")
+	s.InitTabs = []TabSpec{{
+		Name: "api", Cmd: []string{"sh"}, Env: []string{"APP_NAME=api-from-env"},
+		Input: `echo "running $APP_NAME"`,
+	}}
+	ms, err := s.ensureSession(defaultCols, defaultRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Shutdown)
+	waitRender(t, ms.paneFor("api"), "running api-from-env")
+
+	add := func(spec TabSpec) (existed bool, err error) {
+		ms.WithLock(func() { existed, err = ms.addTab(spec) })
+		return existed, err
+	}
+	existed, err := add(TabSpec{Name: "api", Cmd: []string{"sh"}})
+	if err != nil || !existed {
+		t.Errorf("re-adding api: existed=%v err=%v", existed, err)
+	}
+	existed, err = add(TabSpec{Name: "web", Cmd: []string{"sh"}, Env: []string{"APP_NAME=web"}, Input: `echo "running $APP_NAME"`})
+	if err != nil || existed {
+		t.Fatalf("adding web: existed=%v err=%v", existed, err)
+	}
+	waitRender(t, ms.paneFor("web"), "running web")
+	if ms.Session.ActiveTab != 0 {
+		t.Errorf("adding a tab must not steal focus")
+	}
+	if _, err := add(TabSpec{Name: "bad"}); err == nil {
+		t.Error("empty command should fail")
+	}
+
+	if got := tailLines(ms.paneFor("web").Render(), 5); !strings.Contains(got, "running web") {
+		t.Errorf("tail of web = %q", got)
+	}
+	if ms.paneFor("ghost") != nil {
+		t.Error("unknown tab should have no pane")
+	}
+	if _, err := ms.paneFor("web").Pty.WriteString("echo sent-to-web\r"); err != nil {
+		t.Fatal(err)
+	}
+	waitRender(t, ms.paneFor("web"), "sent-to-web")
+}

@@ -406,9 +406,10 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
        sax nx stop [app]            stop an app (all NX sessions if no app)
        sax nx <app>                 shorthand for sax nx serve <app>
 
-   net: sax net up [-f file] [-d]    start the apps of ./.sax.lan (or -f file) and open a view
-                                    with a tab per app (-d: stay detached; later: sax -a <router>)
-       sax net down <router>        stop a router's apps and its view
+   net: sax net up [-f file] [-d]    start the apps of ./.sax.lan (or -f file) as tabs of a
+                                    session named after the router, and attach (-d: detached;
+                                    later: sax -a <router>; sax --tail <router>.<app>)
+       sax net down <router>        stop a router's apps
        sax net                      list routers (sax net help for every command)
        sax net inspect <router>     IPs, routes and the URLs to open
        sax net register [domain]    one sudo: http://<app>.lan in the browser (default: lan)
@@ -1178,37 +1179,27 @@ func doSetupCompletion(args []string) {
 // --- Agent commands ---
 
 func doTail(name string, n int) {
-	if !ipc.IsSessionAlive(name) {
-		fmt.Fprintf(os.Stderr, "sax: session %q not found\n", name)
+	tail, err := ipc.Tail(name, n)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sax: %v\n", err)
 		os.Exit(1)
 	}
-	reply := ipc.QuerySessionTyped(name, "tail", fmt.Sprintf("%d", n))
-	if reply == nil {
-		fmt.Fprintf(os.Stderr, "sax: failed to query session %q\n", name)
-		os.Exit(1)
-	}
-	if tail, ok := reply["tail"].(string); ok {
-		fmt.Print(tail)
-		if tail != "" && !strings.HasSuffix(tail, "\n") {
-			fmt.Println()
-		}
+	fmt.Print(tail)
+	if tail != "" && !strings.HasSuffix(tail, "\n") {
+		fmt.Println()
 	}
 }
 
 func doSend(name, text string) {
-	if !ipc.IsSessionAlive(name) {
-		fmt.Fprintf(os.Stderr, "sax: session %q not found\n", name)
-		os.Exit(1)
-	}
 	// Interpret escape sequences: \n → LF, \r → CR (Enter key in raw PTY)
 	text = strings.ReplaceAll(text, `\r`, "\r")
 	text = strings.ReplaceAll(text, `\n`, "\n")
-	reply := ipc.QuerySessionTyped(name, "send", text)
-	if reply == nil {
-		fmt.Fprintf(os.Stderr, "sax: failed to send to session %q\n", name)
+	sent, err := ipc.Send(name, text)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sax: %v\n", err)
 		os.Exit(1)
 	}
-	if ok, _ := reply["ok"].(bool); ok {
+	if sent {
 		fmt.Println("sent")
 	} else {
 		fmt.Fprintln(os.Stderr, "sax: send failed")

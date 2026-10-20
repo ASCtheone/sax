@@ -219,13 +219,16 @@ publish:
 ```
 
 ```bash
-sax net up                   # start v1's apps (./.sax.lan) and open a view: one tab per app
-                             #   (Ctrl+S d detaches; everything keeps running)
+sax net up                   # start v1's apps (./.sax.lan) in session v1, one tab per app
+                             #   Ctrl+S n/p or 1-9 switch tabs, Ctrl+S d detaches
+                             #   each tab is a shell in that app's network with its cmd typed
+                             #   in: Ctrl+C stops the app, Up+Enter starts it again
 sax net up -f v2.lan -d      # same app, another version, same ports; -d stays detached
 sax -a v2                    # open v2's view later
 sax net ls                   # routers
 sax net inspect v1           # sessions, IPs, rules, host URLs
-sax net down v1              # stop v1's apps and its view
+sax net down v1              # stop v1's apps
+sax --tail v1.api 20         # an app's output (its tab in session v1)
 sax net check                # validate ./.sax.lan (e.g. warns about rules that can never match)
 
 sax net create lab --subnet 10.20.0.0/24 --domain lan

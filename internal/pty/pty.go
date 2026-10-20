@@ -19,15 +19,21 @@ type Process struct {
 // Start spawns a new PTY with the detected shell.
 func Start(cols, rows int, workDir string) (*Process, error) {
 	shell, args := DetectShell()
-	return startProcess(cols, rows, shell, args[1:], workDir)
+	return startProcess(cols, rows, shell, args[1:], workDir, nil)
 }
 
 // StartCommand spawns a new PTY running a specific command.
 func StartCommand(cols, rows int, name string, args []string, workDir string) (*Process, error) {
-	return startProcess(cols, rows, name, args, workDir)
+	return startProcess(cols, rows, name, args, workDir, nil)
 }
 
-func startProcess(cols, rows int, name string, args []string, workDir string) (*Process, error) {
+// StartCommandEnv is StartCommand with extra "KEY=VALUE" variables for this
+// process only; they override the daemon-wide environment.
+func StartCommandEnv(cols, rows int, name string, args []string, workDir string, env []string) (*Process, error) {
+	return startProcess(cols, rows, name, args, workDir, env)
+}
+
+func startProcess(cols, rows int, name string, args []string, workDir string, env []string) (*Process, error) {
 	// Resolve command path (handles .cmd, .bat, .exe on Windows)
 	if resolved, err := exec.LookPath(name); err == nil {
 		name = resolved
@@ -49,8 +55,10 @@ func startProcess(cols, rows int, name string, args []string, workDir string) (*
 
 	cmd := p.Command(name, args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	// Inject environment variables configured in ~/.saxrc (setenv/export).
+	// Inject environment variables configured in ~/.saxrc (setenv/export),
+	// then this process's own.
 	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Env = append(cmd.Env, env...)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}

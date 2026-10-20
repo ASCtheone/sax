@@ -46,9 +46,15 @@ func NewPane(cols, rows int, workDir string) (*Pane, error) {
 
 // NewPaneWithCommand creates a new Pane running a specific command.
 func NewPaneWithCommand(cols, rows int, name string, args []string, workDir string) (*Pane, error) {
+	return NewPaneWithCommandEnv(cols, rows, name, args, workDir, nil)
+}
+
+// NewPaneWithCommandEnv is NewPaneWithCommand with extra environment for the
+// pane's process.
+func NewPaneWithCommandEnv(cols, rows int, name string, args []string, workDir string, env []string) (*Pane, error) {
 	id := nextPaneID()
 
-	proc, err := pty.StartCommand(cols, rows, name, args, workDir)
+	proc, err := pty.StartCommandEnv(cols, rows, name, args, workDir, env)
 	if err != nil {
 		return nil, fmt.Errorf("start command: %w", err)
 	}

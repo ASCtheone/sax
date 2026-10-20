@@ -19,7 +19,7 @@ const netUsage = `usage: sax net                                 list routers
        sax net map <router> <pattern> <target>   append a rule (first match wins)
        sax net unmap <router> <pattern>
        sax net check [-f file]                   validate an env file (default: ./.sax.lan)
-       sax net up [-f file] [-d]                 start the apps and open a view with a tab per app
+       sax net up [-f file] [-d]                 run the apps as tabs of session <router> and attach
                                                  (default file: ./.sax.lan)
                                                  (-d: stay detached; sax -a <router> later)
        sax net down <router> | -f <file>         stop a router's sessions
