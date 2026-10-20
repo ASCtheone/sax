@@ -138,6 +138,12 @@ func main() {
 		return
 	}
 
+	// Virtual networks: sax net <command>
+	if len(args) > 0 && args[0] == "net" {
+		doNet(args[1:])
+		return
+	}
+
 	// cuc dev-container subcommand: sax cuc <command>
 	if len(args) > 0 && args[0] == "cuc" {
 		cucArgs := args[1:]
@@ -382,7 +388,13 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
     nx: sax nx                       list NX projects with serve targets
        sax nx serve [app]           serve an app (interactive if no app)
        sax nx stop [app]            stop an app (all NX sessions if no app)
-       sax nx <app>                 shorthand for sax nx serve <app>`)
+       sax nx <app>                 shorthand for sax nx serve <app>
+
+   net: sax net                      list virtual routers (sax net help for more)
+       sax net create <router>      create a router
+       sax net map <router> <pattern> <target>
+                                    add a rule, e.g. bob.lan/api/* api:3200
+       sax net check [-f file]      validate a sax.net.yaml env file`)
 }
 
 // --- Actions ---
