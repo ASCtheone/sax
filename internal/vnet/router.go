@@ -28,6 +28,8 @@ type Router struct {
 	Owners   map[string]string `json:"owners"`         // session name -> sax session running it
 	Publish  []string          `json:"publish"`        // host port forwards, "15432 -> db:5432"
 	View     string            `json:"view,omitempty"` // sax session showing one tab per app
+	Dirs     map[string]string `json:"dirs,omitempty"` // session name -> its folder (for the banner)
+	Banner   Banner            `json:"banner,omitempty"`
 }
 
 // NewRouter validates and builds an empty router.
@@ -91,6 +93,10 @@ func (r Router) clone() Router {
 	}
 	out.Rules = append([]string{}, r.Rules...)
 	out.Publish = append([]string{}, r.Publish...)
+	out.Dirs = make(map[string]string, len(r.Dirs))
+	for k, v := range r.Dirs {
+		out.Dirs[k] = v
+	}
 	out.Owners = make(map[string]string, len(r.Owners))
 	for k, v := range r.Owners {
 		out.Owners[k] = v
@@ -178,6 +184,25 @@ func (r Router) WithoutSession(name string) Router {
 	out := r.clone()
 	delete(out.Sessions, name)
 	delete(out.Owners, name)
+	delete(out.Dirs, name)
+	return out
+}
+
+// WithDir records the folder a router session runs in ("" forgets it).
+func (r Router) WithDir(name, dir string) Router {
+	out := r.clone()
+	if dir == "" {
+		delete(out.Dirs, name)
+	} else {
+		out.Dirs[name] = dir
+	}
+	return out
+}
+
+// WithBanner sets the router's page banner.
+func (r Router) WithBanner(b Banner) Router {
+	out := r.clone()
+	out.Banner = b
 	return out
 }
 

@@ -128,7 +128,8 @@ func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, 
 			return r, err
 		}
 		assigned = got
-		return next.WithOwner(host, saxName), nil
+		dir, _ := os.Getwd()
+		return next.WithOwner(host, saxName).WithDir(host, dir), nil
 	})
 	if errors.Is(err, vnet.ErrNotFound) {
 		return nil, vnet.Member{}, fmt.Errorf("%w (create it with: sax net create %s)", err, routerName)
@@ -306,7 +307,7 @@ func applyPlan(s vnet.Store, plan vnet.Router, explicit map[string]bool) (vnet.R
 		if err != nil {
 			return cur, err
 		}
-		next = next.WithView(cur.View)
+		next = next.WithView(cur.View).WithBanner(plan.Banner)
 		// Hand-joined sessions keep their addresses; planned ones are placed
 		// after them so a clash is reported instead of silently moved.
 		for _, host := range cur.SortedSessions() {
@@ -317,6 +318,7 @@ func applyPlan(s vnet.Store, plan vnet.Router, explicit map[string]bool) (vnet.R
 			if owner, ok := cur.Owners[host]; ok {
 				next = next.WithOwner(host, owner)
 			}
+			next = next.WithDir(host, cur.Dirs[host])
 		}
 		// Fixed addresses first, then the ones apps already have, then new apps.
 		hosts := plan.SortedSessions()
@@ -325,7 +327,7 @@ func applyPlan(s vnet.Store, plan vnet.Router, explicit map[string]bool) (vnet.R
 			if next, _, err = next.WithSession(host, ip); err != nil {
 				return fmt.Errorf("session %s: %w", host, err)
 			}
-			next = next.WithOwner(host, cur.Name) // a tab of the router's session
+			next = next.WithOwner(host, cur.Name).WithDir(host, plan.Dirs[host]) // a tab of the router's session
 			return nil
 		}
 		for _, host := range hosts {

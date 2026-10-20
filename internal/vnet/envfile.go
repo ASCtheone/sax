@@ -39,6 +39,7 @@ type EnvFile struct {
 	Sessions map[string]SessionSpec `yaml:"sessions"`
 	Routes   []string               `yaml:"routes"`
 	Publish  []string               `yaml:"publish"`
+	Banner   Banner                 `yaml:"banner"`
 }
 
 // ParseEnvFile decodes an env file strictly: unknown keys are errors, so a
@@ -83,6 +84,9 @@ func LoadEnvFile(path string) (EnvFile, error) {
 		resolved[name] = spec
 	}
 	e.Sessions = resolved
+	if e.Banner.File != "" && !filepath.IsAbs(e.Banner.File) {
+		e.Banner.File = filepath.Join(base, e.Banner.File)
+	}
 	return e, nil
 }
 
@@ -148,6 +152,10 @@ func (e EnvFile) Plan() (Router, []string, error) {
 		}
 	}
 
+	r = r.WithBanner(e.Banner)
+	for _, name := range names {
+		r = r.WithDir(name, e.Sessions[name].Cwd)
+	}
 	_, warnings := r.Tables()
 	return r, warnings, nil
 }

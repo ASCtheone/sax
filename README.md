@@ -251,6 +251,22 @@ Under the hood, `register` points the system resolver at the gateway for
 Linux. The gateway then also listens on port 80. Until a domain is
 registered, sax keeps printing the `.localhost` URLs.
 
+Pages opened through the gateway get a small banner so each browser tab says
+what it shows, e.g. `⎇ feat/login* · f0d5d61 · repo-login · v1 › web` (branch,
+`*` when there are uncommitted changes, commit, worktree, router, app). Only
+HTML page loads are touched; API calls, assets and hot reload are not.
+Configure it in `.sax.lan`:
+
+```yaml
+banner: false                                   # off
+banner: "{branch}{dirty} · {worktree} · {app}"  # your text in the default pill
+banner: {html: '<div class="mine">{branch}</div>'}  # an HTML snippet
+banner: {file: ./banner.html}                   # a full HTML file (re-read on change)
+```
+
+Placeholders: `{branch}` `{commit}` `{dirty}` `{worktree}` `{worktree_path}`
+`{router}` `{app}` `{host}` `{ip}` `{dir}`.
+
 The MCP server exposes the same through `sax_net_*` tools and a `net`
 parameter on `sax_exec`.
 
