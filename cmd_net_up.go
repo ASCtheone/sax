@@ -141,7 +141,7 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string) error {
 		return err
 	}
 	printWarnings(w, warnings)
-	printHostURLs(w, r)
+	printHostURLs(w, s, r)
 	return ensureGateway(w, s, run)
 }
 

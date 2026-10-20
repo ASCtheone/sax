@@ -232,10 +232,22 @@ sax net publish lab 15432 db:5432
 sax -x api --net lab npm run dev          # any session can join a router
 ```
 
-Inside a router, an app requesting `http://bob.lan/api/users` hits `api`; from the host use
-`http://bob.lan.v1.localhost:7480` (the `vnet-gateway` session, started
-automatically; `sax net gateway --port 80` drops the port). The MCP server
-exposes the same through `sax_net_*` tools and a `net` parameter on `sax_exec`.
+Inside a router, an app requesting `http://bob.lan/api/users` hits `api`.
+From your browser, the `vnet-gateway` session (started automatically)
+serves:
+
+- `http://bob.lan.v1.localhost:7480`: works out of the box.
+- `http://bob.lan`, after a one-time `sax net register` (one sudo prompt;
+  `sax net unregister` undoes it). When several routers have `bob.lan`, use
+  `http://bob.v1.lan` / `http://bob.v2.lan`.
+
+Under the hood, `register` points the system resolver at the gateway for
+`.lan` only: `/etc/resolver/lan` on macOS, a systemd-resolved drop-in on
+Linux. The gateway then also listens on port 80. Until a domain is
+registered, sax keeps printing the `.localhost` URLs.
+
+The MCP server exposes the same through `sax_net_*` tools and a `net`
+parameter on `sax_exec`.
 
 How it works: virtual addresses are mapped to real loopback sockets, so it
 needs neither root nor network namespaces.
