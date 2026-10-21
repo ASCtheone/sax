@@ -72,6 +72,93 @@ var netTools = []netTool{
 		args:        func(p map[string]interface{}) []string { return []string{"inspect", str(p, "router")} },
 	},
 	{
+		name: "sax_net_project_add",
+		description: "Add a vnet project to ~/.sax.net. Its apps run in dir (default: the current folder). " +
+			"Then add apps with sax_net_app_add and start it with sax_net_up.",
+		props: map[string]interface{}{
+			"name":   stringProp("Project name (lowercase letters, digits, '-')"),
+			"dir":    stringProp("Project folder (default: the current folder)"),
+			"router": stringProp("Router name (default: the project name)"),
+			"domain": stringProp("Domain, e.g. lan"),
+		},
+		required: []string{"name"},
+		args: func(p map[string]interface{}) []string {
+			args := []string{"project", "add", str(p, "name")}
+			for _, k := range []string{"dir", "router", "domain"} {
+				if v := str(p, k); v != "" {
+					args = append(args, "--"+k, v)
+				}
+			}
+			return args
+		},
+	},
+	{
+		name: "sax_net_app_add",
+		description: "Add an app to a vnet project (in the file the project lives in): how it starts (one of " +
+			"cmd, nx task, npm script), folder " +
+			"and env, and optionally the port it listens on with HTTP routes to it and a host port.",
+		props: map[string]interface{}{
+			"project": stringProp("Project name"),
+			"app":     stringProp("App name, e.g. api"),
+			"cmd":     stringProp("Shell command, e.g. go run . (set exactly one of cmd, nx, npm)"),
+			"nx":      stringProp("nx task: project or project:target[:configuration], e.g. api (= api:serve)"),
+			"npm":     stringProp("npm script, e.g. start:dev (= npm run start:dev)"),
+			"cwd":     stringProp("Folder, relative to the project dir"),
+			"env":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "KEY=VALUE entries"},
+			"port":    map[string]interface{}{"type": "integer", "description": "Port the app listens on (for route/publish)"},
+			"route":   stringProp("HTTP route pattern to this app, e.g. dev1.lan/api/* (needs port)"),
+			"publish": map[string]interface{}{"type": "integer", "description": "Host port forwarding to the app (needs port)"},
+		},
+		required: []string{"project", "app"},
+		args: func(p map[string]interface{}) []string {
+			args := []string{"project", "app", "add", str(p, "project"), str(p, "app")}
+			for _, k := range []string{"cmd", "nx", "npm"} {
+				if v := str(p, k); v != "" {
+					args = append(args, "--"+k, v)
+				}
+			}
+			if v := str(p, "cwd"); v != "" {
+				args = append(args, "--cwd", v)
+			}
+			if env, ok := p["env"].([]interface{}); ok {
+				for _, kv := range env {
+					if s, ok := kv.(string); ok {
+						args = append(args, "--env", s)
+					}
+				}
+			}
+			if n, ok := p["port"].(float64); ok && n > 0 {
+				args = append(args, "--port", strconv.Itoa(int(n)))
+			}
+			if v := str(p, "route"); v != "" {
+				args = append(args, "--route", v)
+			}
+			if n, ok := p["publish"].(float64); ok && n > 0 {
+				args = append(args, "--publish", strconv.Itoa(int(n)))
+			}
+			return args
+		},
+	},
+	{
+		name: "sax_net_route_add",
+		description: "Add an HTTP route or TCP mapping to a vnet project (first match wins; at inserts at " +
+			"a 1-based position, default last).",
+		props: map[string]interface{}{
+			"project": stringProp("Project name"),
+			"pattern": stringProp("e.g. dev1.lan/api/* (HTTP) or db.lan:5432 (TCP)"),
+			"target":  stringProp("app:port, e.g. api:3200"),
+			"at":      map[string]interface{}{"type": "integer", "description": "Position (1 = first)"},
+		},
+		required: []string{"project", "pattern", "target"},
+		args: func(p map[string]interface{}) []string {
+			args := []string{"project", "route", "add", str(p, "project"), str(p, "pattern"), str(p, "target")}
+			if n, ok := p["at"].(float64); ok && n > 0 {
+				args = append(args, "--at", strconv.Itoa(int(n)))
+			}
+			return args
+		},
+	},
+	{
 		name: "sax_net_restart",
 		description: "Restart a vnet project's apps: stop each app's whole process tree, then start it " +
 			"fresh from the env file (edits apply). Works from any folder.",

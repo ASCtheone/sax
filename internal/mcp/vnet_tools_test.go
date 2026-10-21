@@ -61,16 +61,25 @@ func TestNetToolArgs(t *testing.T) {
 		params map[string]interface{}
 		want   string
 	}{
-		"sax_net_up":       {map[string]interface{}{"file": "v1.yaml"}, "up -d -f v1.yaml"},
-		"sax_net_projects": {map[string]interface{}{}, "projects"},
-		"sax_net_restart":  {map[string]interface{}{"project": "dev1", "app": "api"}, "restart dev1 api"},
+		"sax_net_up":          {map[string]interface{}{"file": "v1.yaml"}, "up -d -f v1.yaml"},
+		"sax_net_projects":    {map[string]interface{}{}, "projects"},
+		"sax_net_restart":     {map[string]interface{}{"project": "dev1", "app": "api"}, "restart dev1 api"},
+		"sax_net_project_add": {map[string]interface{}{"name": "dev1", "dir": "~/code/dev1"}, "project add dev1 --dir ~/code/dev1"},
+		"sax_net_app_add": {map[string]interface{}{"project": "dev1", "app": "api", "cmd": "npm start", "env": []interface{}{"A=1"},
+			"port": 3200.0, "route": "dev1.lan/api/*", "publish": 13200.0},
+			"project app add dev1 api --cmd npm start --env A=1 --port 3200 --route dev1.lan/api/* --publish 13200"},
+		"sax_net_app_add#nx": {map[string]interface{}{"project": "dev1", "app": "shop", "nx": "shop:serve"},
+			"project app add dev1 shop --nx shop:serve"},
+		"sax_net_route_add": {map[string]interface{}{"project": "dev1", "pattern": "dev1.lan/*", "target": "web:4200", "at": 1.0},
+			"project route add dev1 dev1.lan/* web:4200 --at 1"},
 		"sax_net_logs": {map[string]interface{}{"project": "dev1", "app": "api", "lines": 20.0},
 			"logs dev1 api -n 20 --no-color"},
 		"sax_net_down": {map[string]interface{}{"router": "v1"}, "down v1"},
 		"sax_net_map": {map[string]interface{}{"router": "v1", "pattern": "bob.lan/*", "target": "web:4200"},
 			"map v1 bob.lan/* web:4200"},
 	}
-	for name, c := range cases {
+	for key, c := range cases {
+		name, _, _ := strings.Cut(key, "#") // "tool#variant"
 		if got := strings.Join(byName[name].args(c.params), " "); got != c.want {
 			t.Errorf("%s args = %q, want %q", name, got, c.want)
 		}

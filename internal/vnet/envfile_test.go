@@ -153,3 +153,45 @@ func TestFindEnvFile(t *testing.T) {
 		t.Errorf("both present = %q, %v; want %s first", got, err, EnvFileName)
 	}
 }
+
+func TestSessionSpec_Run(t *testing.T) {
+	for _, c := range []struct {
+		spec      SessionSpec
+		kind, val string
+		errHas    string
+	}{
+		{SessionSpec{Cmd: "go run ."}, "cmd", "go run .", ""},
+		{SessionSpec{NX: "api"}, "nx", "api", ""},
+		{SessionSpec{NPM: " start:dev "}, "npm", "start:dev", ""},
+		{SessionSpec{}, "", "", "missing"},
+		{SessionSpec{Cmd: "x", NX: "api"}, "", "", "only one"},
+	} {
+		kind, val, err := c.spec.Run()
+		if c.errHas != "" {
+			if err == nil || !strings.Contains(err.Error(), c.errHas) {
+				t.Errorf("%+v: err = %v", c.spec, err)
+			}
+			continue
+		}
+		if err != nil || kind != c.kind || val != c.val {
+			t.Errorf("%+v: %s %q %v", c.spec, kind, val, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"api":                   "run api:serve",
+		"api:build:production":  "run api:build:production",
+		"web:serve --port 4300": "run web:serve --port 4300",
+	} {
+		if got := strings.Join(NXTask(in), " "); got != want {
+			t.Errorf("NXTask(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	e, err := ParseEnvFile([]byte("router: v1\nsessions:\n  api: {nx: api, npm: start}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.Plan(); err == nil || !strings.Contains(err.Error(), "only one of cmd, nx or npm") {
+		t.Errorf("two run keys must not plan: %v", err)
+	}
+}

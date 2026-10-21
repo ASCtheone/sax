@@ -23,12 +23,53 @@ const (
 	DefaultSubnet = "10.77.0.0/24"
 )
 
-// SessionSpec describes one session of an environment.
+// SessionSpec describes one session of an environment. It runs exactly one
+// of: Cmd (a shell command), NX (an nx task: "api" = api:serve,
+// "api:build:production", extra words passed on) or NPM (an npm script:
+// "start:dev" = npm run start:dev).
 type SessionSpec struct {
 	IP  string            `yaml:"ip"`
 	Cwd string            `yaml:"cwd"`
 	Cmd string            `yaml:"cmd"`
+	NX  string            `yaml:"nx"`
+	NPM string            `yaml:"npm"`
 	Env map[string]string `yaml:"env"`
+}
+
+// RunKinds are the keys that say how an app starts; exactly one is set.
+var RunKinds = []string{"cmd", "nx", "npm"}
+
+// Run returns which of cmd, nx or npm the session uses and its value, or
+// an error unless exactly one is set.
+func (s SessionSpec) Run() (kind, value string, err error) {
+	set := 0
+	for _, kv := range [][2]string{{"cmd", s.Cmd}, {"nx", s.NX}, {"npm", s.NPM}} {
+		if strings.TrimSpace(kv[1]) != "" {
+			kind, value = kv[0], strings.TrimSpace(kv[1])
+			set++
+		}
+	}
+	switch set {
+	case 1:
+		return kind, value, nil
+	case 0:
+		return "", "", fmt.Errorf("missing \"cmd\" (or \"nx\" / \"npm\")")
+	}
+	return "", "", fmt.Errorf("set only one of cmd, nx or npm")
+}
+
+// NXTask returns the nx run arguments for an nx: value: "api" runs
+// api:serve, "api:build:production" that target and configuration, and
+// further words are passed on.
+func NXTask(value string) []string {
+	f := strings.Fields(value)
+	if len(f) == 0 {
+		return nil
+	}
+	if !strings.Contains(f[0], ":") {
+		f[0] += ":serve"
+	}
+	return append([]string{"run"}, f...)
 }
 
 // EnvFile is a parsed .sax.lan (YAML): one router, its sessions and its ordered
@@ -154,8 +195,8 @@ func (e EnvFile) Plan() (Router, []string, error) {
 			if (spec.IP != "") != explicit {
 				continue
 			}
-			if spec.Cmd == "" {
-				return Router{}, nil, fmt.Errorf("session %s: missing \"cmd\"", name)
+			if _, _, err := spec.Run(); err != nil {
+				return Router{}, nil, fmt.Errorf("session %s: %w", name, err)
 			}
 			if r, _, err = r.WithSession(name, spec.IP); err != nil {
 				return Router{}, nil, fmt.Errorf("session %s: %w", name, err)
