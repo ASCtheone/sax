@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,14 +33,22 @@ type SessionSpec struct {
 
 // EnvFile is a parsed .sax.lan (YAML): one router, its sessions and its ordered
 // routes. Routes are a YAML list so their written order is the match order.
+// It is also one project of a projects file (see Config).
 type EnvFile struct {
-	Router   string                 `yaml:"router"`
-	Subnet   string                 `yaml:"subnet"`
-	Domain   string                 `yaml:"domain"`
+	Router string `yaml:"router"`
+	Subnet string `yaml:"subnet"`
+	Domain string `yaml:"domain"`
+	// Dir is the folder relative session cwds (and the banner file) resolve
+	// against; default: the file's folder. "~/" means the home folder.
+	Dir      string                 `yaml:"dir"`
 	Sessions map[string]SessionSpec `yaml:"sessions"`
 	Routes   []string               `yaml:"routes"`
 	Publish  []string               `yaml:"publish"`
 	Banner   Banner                 `yaml:"banner"`
+
+	// Roots are the folders the file names for this project (dir and
+	// explicit session cwds), resolved. Config.ForDir matches against them.
+	Roots []string `yaml:"-"`
 }
 
 // ParseEnvFile decodes an env file strictly: unknown keys are errors, so a
@@ -57,37 +66,61 @@ func ParseEnvFile(data []byte) (EnvFile, error) {
 	return e, nil
 }
 
-// LoadEnvFile reads and parses path. Session working directories are resolved
-// relative to the file's directory, defaulting to that directory.
+// LoadEnvFile reads a single-project env file. Session working directories
+// are resolved relative to the file's directory (or its dir:), defaulting to
+// it. A projects file is refused with the list of its projects.
 func LoadEnvFile(path string) (EnvFile, error) {
-	data, err := os.ReadFile(path)
+	c, err := LoadConfig(path)
 	if err != nil {
-		return EnvFile{}, fmt.Errorf("read env file: %w", err)
+		return EnvFile{}, err
 	}
-	e, err := ParseEnvFile(data)
-	if err != nil {
-		return EnvFile{}, fmt.Errorf("%s: %w", path, err)
+	if c.Multi {
+		return EnvFile{}, fmt.Errorf("%s has several projects (%s): pick one", path, strings.Join(c.Names(), ", "))
 	}
-	base, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return EnvFile{}, fmt.Errorf("resolve env file dir: %w", err)
-	}
+	e, _ := c.Project(c.Names()[0])
+	return e, nil
+}
 
+// resolvePaths makes the env file's folders absolute: dir against the file's
+// folder, then session cwds and the banner file against dir.
+func (e EnvFile) resolvePaths(fileDir string) EnvFile {
+	base := fileDir
+	var roots []string
+	if e.Dir != "" {
+		base = expandPath(e.Dir, fileDir)
+		e.Dir = base
+		roots = append(roots, base)
+	}
 	resolved := make(map[string]SessionSpec, len(e.Sessions))
 	for name, spec := range e.Sessions {
-		switch {
-		case spec.Cwd == "":
+		if spec.Cwd == "" {
 			spec.Cwd = base
-		case !filepath.IsAbs(spec.Cwd):
-			spec.Cwd = filepath.Join(base, spec.Cwd)
+		} else {
+			spec.Cwd = expandPath(spec.Cwd, base)
+			roots = append(roots, spec.Cwd)
 		}
 		resolved[name] = spec
 	}
 	e.Sessions = resolved
-	if e.Banner.File != "" && !filepath.IsAbs(e.Banner.File) {
-		e.Banner.File = filepath.Join(base, e.Banner.File)
+	if e.Banner.File != "" {
+		e.Banner.File = expandPath(e.Banner.File, base)
 	}
-	return e, nil
+	e.Roots = roots
+	return e
+}
+
+// expandPath resolves p against base, expanding a leading "~/" to the home
+// folder.
+func expandPath(p, base string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, p[1:])
+		}
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(base, p)
 }
 
 // SessionNames returns session names in a stable order.

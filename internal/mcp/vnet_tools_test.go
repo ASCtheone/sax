@@ -41,7 +41,7 @@ func TestRegisterNetTools(t *testing.T) {
 	for _, def := range s.tools {
 		names[def.Name] = true
 	}
-	for _, want := range []string{"sax_net_list", "sax_net_inspect", "sax_net_up", "sax_net_down", "sax_net_map"} {
+	for _, want := range []string{"sax_net_list", "sax_net_inspect", "sax_net_projects", "sax_net_up", "sax_net_down", "sax_net_map"} {
 		if !names[want] {
 			t.Errorf("tool %s not registered", want)
 		}
@@ -61,8 +61,9 @@ func TestNetToolArgs(t *testing.T) {
 		params map[string]interface{}
 		want   string
 	}{
-		"sax_net_up":   {map[string]interface{}{"file": "v1.yaml"}, "up -d -f v1.yaml"},
-		"sax_net_down": {map[string]interface{}{"router": "v1"}, "down v1"},
+		"sax_net_up":       {map[string]interface{}{"file": "v1.yaml"}, "up -d -f v1.yaml"},
+		"sax_net_projects": {map[string]interface{}{}, "projects"},
+		"sax_net_down":     {map[string]interface{}{"router": "v1"}, "down v1"},
 		"sax_net_map": {map[string]interface{}{"router": "v1", "pattern": "bob.lan/*", "target": "web:4200"},
 			"map v1 bob.lan/* web:4200"},
 	}
@@ -73,5 +74,8 @@ func TestNetToolArgs(t *testing.T) {
 	}
 	if got := strings.Join(byName["sax_net_up"].args(map[string]interface{}{}), " "); got != "up -d" {
 		t.Errorf("up without file = %q", got)
+	}
+	if got := strings.Join(byName["sax_net_up"].args(map[string]interface{}{"project": "dev1"}), " "); got != "up -d dev1" {
+		t.Errorf("up with project = %q", got)
 	}
 }

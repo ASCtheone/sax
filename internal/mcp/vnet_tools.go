@@ -71,21 +71,36 @@ var netTools = []netTool{
 		args:        func(p map[string]interface{}) []string { return []string{"inspect", str(p, "router")} },
 	},
 	{
+		name: "sax_net_projects",
+		description: "List the vnet projects sax_net_up can start: those of ./.sax.lan and of the " +
+			"global ~/.sax.net (projects: map), with their router and whether they are up.",
+		props: map[string]interface{}{},
+		args:  func(map[string]interface{}) []string { return []string{"projects"} },
+	},
+	{
 		name: "sax_net_up",
-		description: "Start the environment in a .sax.lan file: create/update its router, " +
-			"start its sessions and the HTTP gateway. Idempotent.",
-		props: map[string]interface{}{"file": stringProp("Path to the env file (default ./.sax.lan, or ./sax.net.yaml)")},
+		description: "Start a vnet project: create/update its router, start its apps (tabs of session " +
+			"<router>) and the HTTP gateway. Idempotent. Without project: ./.sax.lan, else the " +
+			"~/.sax.net project covering the current folder.",
+		props: map[string]interface{}{
+			"file":    stringProp("Path to the env file (default ./.sax.lan, then ~/.sax.net)"),
+			"project": stringProp("Project name from ./.sax.lan or ~/.sax.net (see sax_net_projects)"),
+		},
 		args: func(p map[string]interface{}) []string {
+			args := []string{"up", "-d"}
 			if f := str(p, "file"); f != "" {
-				return []string{"up", "-d", "-f", f}
+				args = append(args, "-f", f)
 			}
-			return []string{"up", "-d"}
+			if name := str(p, "project"); name != "" {
+				args = append(args, name)
+			}
+			return args
 		},
 	},
 	{
 		name:        "sax_net_down",
 		description: "Stop all sessions of a vnet router and release their addresses (rules are kept).",
-		props:       map[string]interface{}{"router": stringProp("Router name")},
+		props:       map[string]interface{}{"router": stringProp("Router name, or a project name from ./.sax.lan or ~/.sax.net")},
 		required:    []string{"router"},
 		args:        func(p map[string]interface{}) []string { return []string{"down", str(p, "router")} },
 	},

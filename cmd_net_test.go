@@ -123,13 +123,13 @@ func TestNetCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := netCheck(&out, path); err != nil {
+	if err := netCheck(&out, projectRef{File: path}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "never matches") || !strings.Contains(out.String(), "ok") {
 		t.Errorf("check output:\n%s", out.String())
 	}
-	if err := netCheck(&out, filepath.Join(dir, "nope.yaml")); err == nil || !strings.Contains(err.Error(), "not found") {
+	if err := netCheck(&out, projectRef{File: filepath.Join(dir, "nope.yaml")}); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("missing file err = %v", err)
 	}
 }

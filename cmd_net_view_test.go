@@ -16,7 +16,7 @@ func TestNetUp_AttachesUnlessDetached(t *testing.T) {
 	fakeShim(t)
 	s := vnet.NewStore(t.TempDir())
 	run := newFakeRunner()
-	if err := netUp(&bytes.Buffer{}, s, run, writeEnv(t, upEnv), true); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, upEnv)}, true); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(run.attached, []string{"v1"}) {
@@ -24,7 +24,7 @@ func TestNetUp_AttachesUnlessDetached(t *testing.T) {
 	}
 
 	run2 := newFakeRunner()
-	if err := netUp(&bytes.Buffer{}, vnet.NewStore(t.TempDir()), run2, writeEnv(t, upEnv), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, vnet.NewStore(t.TempDir()), run2, projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(run2.attached) != 0 || len(run2.tabs["v1"]) != 2 {
@@ -38,14 +38,14 @@ func TestNetUp_AddsNewAppsToRunningSession(t *testing.T) {
 	run := newFakeRunner()
 	small := strings.Replace(upEnv, "  web: { cmd: \"ng serve\" }\n", "", 1)
 	small = strings.Replace(small, "  - bob.lan/*     -> web:4200\n", "", 1)
-	if err := netUp(&bytes.Buffer{}, s, run, writeEnv(t, small), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, small)}, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(run.tabs["v1"]) != 1 {
 		t.Fatalf("tabs = %+v", run.tabs["v1"])
 	}
 	var out bytes.Buffer
-	if err := netUp(&out, s, run, writeEnv(t, upEnv), false); err != nil {
+	if err := netUp(&out, s, run, projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(run.tabs["v1"]) != 2 || !strings.Contains(out.String(), "web  10.12.12.2  started") ||
@@ -58,7 +58,7 @@ func TestNetUp_NeverTakesOverForeignSession(t *testing.T) {
 	fakeShim(t)
 	run := newFakeRunner()
 	run.alive["v1"] = true // the user's own session called v1
-	err := netUp(&bytes.Buffer{}, vnet.NewStore(t.TempDir()), run, writeEnv(t, upEnv), false)
+	err := netUp(&bytes.Buffer{}, vnet.NewStore(t.TempDir()), run, projectRef{File: writeEnv(t, upEnv)}, false)
 	if err == nil || !strings.Contains(err.Error(), "not started by sax net up") {
 		t.Errorf("err = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestNetUp_StopsLegacyPerAppSessions(t *testing.T) {
 	run := newFakeRunner()
 	run.alive["v1.api"] = true
 	var out bytes.Buffer
-	if err := netUp(&out, s, run, writeEnv(t, upEnv), false); err != nil {
+	if err := netUp(&out, s, run, projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(run.killed, []string{"v1.api"}) || !strings.Contains(out.String(), "now run as tabs") {
@@ -91,7 +91,7 @@ func TestNetDown_StopsView(t *testing.T) {
 	fakeShim(t)
 	s := vnet.NewStore(t.TempDir())
 	run := newFakeRunner()
-	if err := netUp(&bytes.Buffer{}, s, run, writeEnv(t, upEnv), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -140,19 +140,19 @@ func TestNetUp_DefaultFileIsDotSaxLan(t *testing.T) {
 	s := vnet.NewStore(t.TempDir())
 	run := newFakeRunner()
 
-	if err := netUp(&bytes.Buffer{}, s, run, "", false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: ""}, false); err != nil {
 		t.Fatalf("up without -f: %v", err)
 	}
 	if len(run.tabs["v1"]) != 2 {
 		t.Error(".sax.lan was not used")
 	}
 	var out bytes.Buffer
-	if err := netCheck(&out, ""); err != nil || !strings.Contains(out.String(), ".sax.lan: ok") {
+	if err := netCheck(&out, projectRef{File: ""}); err != nil || !strings.Contains(out.String(), ".sax.lan: ok") {
 		t.Errorf("check without -f: %v\n%s", err, out.String())
 	}
 
 	t.Chdir(t.TempDir())
-	err := netUp(&bytes.Buffer{}, s, run, "", false)
+	err := netUp(&bytes.Buffer{}, s, run, projectRef{File: ""}, false)
 	if err == nil || !strings.Contains(err.Error(), "no .sax.lan") || !strings.Contains(err.Error(), "-f") {
 		t.Errorf("no file: err = %v", err)
 	}
@@ -168,7 +168,7 @@ func TestNetUp_ReplacesOldStyleView(t *testing.T) {
 	run := newFakeRunner()
 	run.alive["v1"] = true
 	run.addTabErr = errAddTabUnsupported
-	if err := netUp(&bytes.Buffer{}, s, run, writeEnv(t, upEnv), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(run.killed, []string{"v1"}) || len(run.tabs["v1"]) != 2 {
@@ -183,13 +183,13 @@ func TestNetUp_ExistingAppsKeepTheirIPs(t *testing.T) {
 	s := vnet.NewStore(t.TempDir())
 	run := newFakeRunner()
 	two := "router: v1\nsubnet: 10.12.12.0/24\nsessions:\n  api: {cmd: a}\n  web: {cmd: w}\n"
-	if err := netUp(&bytes.Buffer{}, s, run, writeEnv(t, two), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, two)}, false); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := s.Get("v1")
 
 	three := two + "  db: {cmd: d}\n" // sorts between api and web
-	if err := netUp(&bytes.Buffer{}, s, run, writeEnv(t, three), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, three)}, false); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := s.Get("v1")

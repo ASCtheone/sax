@@ -142,18 +142,20 @@ func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, 
 	return vnet.DaemonEnv(m, paths), m, nil
 }
 
-// netUp brings up the environment described by an env file: it creates or
-// updates the router (the file is the source of truth for domain and routes)
-// and runs every app as a tab of the router's session, adding tabs for apps
-// that are not running yet. With attach it then opens that session.
-func netUp(w io.Writer, s vnet.Store, run sessionRunner, path string, attach bool) error {
-	e, err := loadEnvFile(path)
+// netUp brings up the environment of a project (see resolveProject): it
+// creates or updates the router (the file is the source of truth for domain
+// and routes) and runs every app as a tab of the router's session, adding
+// tabs for apps that are not running yet. With attach it then opens that
+// session.
+func netUp(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef, attach bool) error {
+	p, err := resolveProject(ref)
 	if err != nil {
 		return err
 	}
+	e := p.EnvFile
 	plan, warnings, err := e.Plan()
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return fmt.Errorf("%s: %w", p.label(), err)
 	}
 	paths, err := installShim()
 	if err != nil {
@@ -247,27 +249,6 @@ func stopLegacyApps(w io.Writer, s vnet.Store, run sessionRunner, plan vnet.Rout
 			fmt.Fprintf(w, "stopped %s (apps now run as tabs of %s)\n", owner, cur.Name)
 		}
 	}
-}
-
-// resolveEnvPath returns path, or the default env file of the current
-// folder (.sax.lan, else sax.net.yaml) when path is "".
-func resolveEnvPath(path string) (string, error) {
-	if path != "" {
-		return path, nil
-	}
-	return vnet.FindEnvFile(".")
-}
-
-func loadEnvFile(path string) (vnet.EnvFile, error) {
-	path, err := resolveEnvPath(path)
-	if err != nil {
-		return vnet.EnvFile{}, err
-	}
-	e, err := vnet.LoadEnvFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return vnet.EnvFile{}, fmt.Errorf("%s not found", path)
-	}
-	return e, err
 }
 
 // explicitIPs lists the apps whose address the env file fixes with ip:.
@@ -409,17 +390,19 @@ func netDown(w io.Writer, s vnet.Store, run sessionRunner, routerName string) er
 	return nil
 }
 
-// routerFromArgs resolves the router for `down`: a positional name or the
-// router named in an env file.
-func routerFromArgs(pos []string, file string) (string, error) {
-	if len(pos) > 0 {
-		return pos[0], nil
+// routerFromArgs resolves the router for `down`: a router name, a project
+// name, or the project an env file (or this folder) gives.
+func routerFromArgs(s vnet.Store, ref projectRef) (string, error) {
+	if ref.Name != "" && ref.File == "" {
+		if _, err := s.Get(ref.Name); err == nil {
+			return ref.Name, nil
+		}
 	}
-	e, err := loadEnvFile(file)
+	p, err := resolveProject(ref)
 	if err != nil {
 		return "", err
 	}
-	return e.Router, nil
+	return p.Router, nil
 }
 
 // runningOwners lists sax sessions of a router that are still alive.
