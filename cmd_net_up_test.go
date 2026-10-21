@@ -128,7 +128,7 @@ func TestNetUp_RunsAppsAsTabsWithNetworkEnv(t *testing.T) {
 	path := writeEnv(t, upEnv)
 	var out bytes.Buffer
 
-	if err := netUp(&out, s, run, path, false); err != nil {
+	if err := netUp(&out, s, run, projectRef{File: path}, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(run.launched) != 0 && run.launched["v1.api"].command != nil {
@@ -160,7 +160,7 @@ func TestNetUp_RunsAppsAsTabsWithNetworkEnv(t *testing.T) {
 
 	// Second up: the session is running, so apps are kept, not restarted.
 	out.Reset()
-	if err := netUp(&out, s, run, path, false); err != nil {
+	if err := netUp(&out, s, run, projectRef{File: path}, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(run.tabs["v1"]) != 2 || !strings.Contains(out.String(), "api  10.12.12.4  running") {
@@ -177,7 +177,7 @@ func TestNetUp_TwoVersionsSideBySide(t *testing.T) {
 	run := newFakeRunner()
 	var out bytes.Buffer
 	for _, v := range []string{"v1", "v2"} {
-		if err := netUp(&out, s, run, writeEnv(t, strings.Replace(upEnv, "router: v1", "router: "+v, 1)), false); err != nil {
+		if err := netUp(&out, s, run, projectRef{File: writeEnv(t, strings.Replace(upEnv, "router: v1", "router: "+v, 1))}, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -192,7 +192,7 @@ func TestNetUp_SubnetMismatch(t *testing.T) {
 	s := vnet.NewStore(t.TempDir())
 	r, _ := vnet.NewRouter("v1", "10.99.0.0/24", "")
 	_ = s.Create(r)
-	err := netUp(&bytes.Buffer{}, s, newFakeRunner(), writeEnv(t, upEnv), false)
+	err := netUp(&bytes.Buffer{}, s, newFakeRunner(), projectRef{File: writeEnv(t, upEnv)}, false)
 	if err == nil || !strings.Contains(err.Error(), "already exists with subnet") {
 		t.Errorf("err = %v", err)
 	}
@@ -206,7 +206,7 @@ func TestNetUp_KeepsHandJoinedSessions(t *testing.T) {
 	if _, _, err := netJoin(s, "debug", "v1:tool", "10.12.12.50"); err != nil {
 		t.Fatal(err)
 	}
-	if err := netUp(&bytes.Buffer{}, s, newFakeRunner(), writeEnv(t, upEnv), false); err != nil {
+	if err := netUp(&bytes.Buffer{}, s, newFakeRunner(), projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Get("v1")
@@ -221,7 +221,7 @@ func TestNetDownAndRemove(t *testing.T) {
 	run := newFakeRunner()
 	var out bytes.Buffer
 	path := writeEnv(t, upEnv)
-	if err := netUp(&out, s, run, path, false); err != nil {
+	if err := netUp(&out, s, run, projectRef{File: path}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,7 +229,7 @@ func TestNetDownAndRemove(t *testing.T) {
 		t.Errorf("rm with live sessions err = %v", err)
 	}
 
-	router, err := routerFromArgs(nil, path)
+	router, err := routerFromArgs(s, projectRef{File: path})
 	if err != nil || router != "v1" {
 		t.Fatalf("routerFromArgs = %q, %v", router, err)
 	}

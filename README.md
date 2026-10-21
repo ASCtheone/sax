@@ -231,7 +231,37 @@ sax net inspect v1           # sessions, IPs, rules, host URLs
 sax net down v1              # stop v1's apps
 sax --tail v1.api 20         # an app's output (its tab in session v1)
 sax net check                # validate ./.sax.lan (e.g. warns about rules that can never match)
+```
 
+```yaml
+# ~/.sax.net: several projects in one file, each with the keys of a .sax.lan
+projects:
+  dev1:
+    dir: ~/code/dev1           # base of relative cwds (default: the file's folder)
+    sessions:
+      api: { cwd: api, cmd: "npm run start:dev" }
+      web: { cwd: web, cmd: "ng serve" }
+    routes:
+      - dev1.lan/api/* -> api:3200
+      - dev1.lan/*     -> web:4200
+  dev2:
+    router: two                # default: the project name
+    dir: ~/code/dev2
+    sessions:
+      api: { cmd: "go run ." }
+```
+
+```bash
+sax net projects             # projects of ./.sax.lan and ~/.sax.net, and which are up
+sax net up dev2              # start a project by name, from any folder
+cd ~/code/dev1/api && sax net up   # no ./.sax.lan: the project whose dir contains this folder
+sax net down dev2            # a project or router name
+```
+
+A local `./.sax.lan` wins over `~/.sax.net` (also for a project of the same
+name), and any env file may use `projects:`.
+
+```bash
 sax net create lab --subnet 10.20.0.0/24 --domain lan
 sax net map lab 'bob.lan/api/*' api:3200
 sax net publish lab 15432 db:5432

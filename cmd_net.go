@@ -18,12 +18,14 @@ const netUsage = `usage: sax net                                 list routers
        sax net inspect <router>
        sax net map <router> <pattern> <target>   append a rule (first match wins)
        sax net unmap <router> <pattern>
-       sax net check [-f file]                   validate an env file (default: ./.sax.lan)
-       sax net up [-f file] [-d]                 run the apps as tabs of session <router> and attach
-                                                 (default file: ./.sax.lan)
+       sax net projects                          projects of ./.sax.lan and ~/.sax.net
+       sax net check [project] [-f file]         validate env files (default: ./.sax.lan, ~/.sax.net)
+       sax net up [project] [-f file] [-d]       run the apps as tabs of session <router> and attach
+                                                 (default: ./.sax.lan, else the ~/.sax.net project
+                                                 whose dir contains this folder)
                                                  (-d: stay detached; sax -a <router> later,
                                                  or one app alone: sax -a <router>.<app>)
-       sax net down <router> | -f <file>         stop a router's sessions
+       sax net down <router|project> | -f <file> stop a router's sessions
        sax net publish <router> <host-port> <target>
                                                  forward 127.0.0.1:<host-port> into the router
        sax net unpublish <router> <host-port>
@@ -32,6 +34,12 @@ const netUsage = `usage: sax net                                 list routers
        sax net unregister [domain...]
        sax -x <name> --net <router>[:<host>] [--ip A] <cmd...>
                                                  run a session inside a router
+
+~/.sax.net holds several projects, each with the keys of a .sax.lan (router
+defaults to the project name; dir: is the base of relative cwds):
+       projects:
+         dev1: { dir: ~/code/dev1, sessions: { api: { cwd: api, cmd: npm start } } }
+         dev2: { dir: ~/code/dev2, sessions: { ... }, routes: [ ... ] }
 
 from the host: http://<host>.<router>.localhost:7480 (HTTP routes) and published ports
 
@@ -74,7 +82,10 @@ func doNet(args []string) {
 	case "unmap":
 		err = netUnmap(os.Stdout, vnetStore(), pos)
 	case "check":
-		err = netCheck(os.Stdout, flagValue(args, "-f"))
+		err = netCheck(os.Stdout, refFromArgs(pos, flagValue(args, "-f")))
+	case "projects":
+		dir, _ := os.Getwd()
+		err = netProjects(os.Stdout, daemonRunner{}, dir)
 	case "publish":
 		err = netPublish(os.Stdout, vnetStore(), daemonRunner{}, pos)
 	case "unpublish":
@@ -86,10 +97,10 @@ func doNet(args []string) {
 	case "unregister":
 		err = netUnregister(os.Stdout, vnetStore(), pos)
 	case "up":
-		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, flagValue(args, "-f"), wantsAttach(args))
+		err = netUp(os.Stdout, vnetStore(), daemonRunner{}, refFromArgs(pos, flagValue(args, "-f")), wantsAttach(args))
 	case "down":
 		var router string
-		if router, err = routerFromArgs(pos, flagValue(args, "-f")); err == nil {
+		if router, err = routerFromArgs(vnetStore(), refFromArgs(pos, flagValue(args, "-f"))); err == nil {
 			err = netDown(os.Stdout, vnetStore(), daemonRunner{}, router)
 		}
 	case "help", "-h", "--help":
@@ -250,22 +261,55 @@ func netUnmap(w io.Writer, s vnet.Store, pos []string) error {
 	return nil
 }
 
-func netCheck(w io.Writer, path string) error {
-	path, err := resolveEnvPath(path)
-	if err != nil {
-		return err
+// netCheck validates a project (by name), every project of a file (-f), or
+// every project of ./.sax.lan and ~/.sax.net.
+func netCheck(w io.Writer, ref projectRef) error {
+	var projects []project
+	switch {
+	case ref.Name != "":
+		p, err := resolveProject(ref)
+		if err != nil {
+			return err
+		}
+		projects = append(projects, p)
+	default:
+		var configs []vnet.Config
+		if ref.File != "" {
+			c, err := loadConfig(ref.File)
+			if err != nil {
+				return err
+			}
+			configs = append(configs, c)
+		} else {
+			var err error
+			if configs, err = configsFor(ref.Dir); err != nil {
+				return err
+			}
+			if len(configs) == 0 {
+				_, err := resolveProject(ref) // for its "nothing here" message
+				return err
+			}
+		}
+		for _, c := range configs {
+			for _, name := range c.Names() {
+				e, _ := c.Project(name)
+				projects = append(projects, project{EnvFile: e, Name: name, Source: c.Path, Multi: c.Multi})
+			}
+		}
 	}
-	e, err := loadEnvFile(path)
-	if err != nil {
-		return err
+
+	for i, p := range projects {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		r, warnings, err := p.Plan()
+		if err != nil {
+			return fmt.Errorf("%s: %w", p.label(), err)
+		}
+		printRouter(w, r, warnings)
+		warnHostOverlap(w, r.Subnet)
+		fmt.Fprintf(w, "\n%s: ok\n", p.label())
 	}
-	r, warnings, err := e.Plan()
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	printRouter(w, r, warnings)
-	warnHostOverlap(w, r.Subnet)
-	fmt.Fprintf(w, "\n%s: ok\n", path)
 	return nil
 }
 
