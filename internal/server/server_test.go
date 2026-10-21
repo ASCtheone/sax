@@ -32,14 +32,23 @@ func TestEnsureSession_StartsCommandWithoutAttach(t *testing.T) {
 	}
 	t.Cleanup(func() { waitShutdown(t, s) })
 
+	// Read under the session lock: the pane exits (and is removed) after 1s.
+	render := func() (out string) {
+		ms.WithLock(func() {
+			if p := ms.Session.ActivePane(); p != nil {
+				out = p.Render()
+			}
+		})
+		return out
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(ms.Session.ActivePane().Render(), "eager-start-ok") {
+		if strings.Contains(render(), "eager-start-ok") {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("command output never appeared without an attached client:\n%s", ms.Session.ActivePane().Render())
+	t.Fatalf("command output never appeared without an attached client:\n%s", render())
 }
 
 func TestEnsureSession_ReturnsExisting(t *testing.T) {

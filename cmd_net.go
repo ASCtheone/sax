@@ -21,7 +21,8 @@ const netUsage = `usage: sax net                                 list routers
        sax net check [-f file]                   validate an env file (default: ./.sax.lan)
        sax net up [-f file] [-d]                 run the apps as tabs of session <router> and attach
                                                  (default file: ./.sax.lan)
-                                                 (-d: stay detached; sax -a <router> later)
+                                                 (-d: stay detached; sax -a <router> later,
+                                                 or one app alone: sax -a <router>.<app>)
        sax net down <router> | -f <file>         stop a router's sessions
        sax net publish <router> <host-port> <target>
                                                  forward 127.0.0.1:<host-port> into the router

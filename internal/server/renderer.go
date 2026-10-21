@@ -14,18 +14,19 @@ import (
 
 // RenderContext holds the state needed to render a frame.
 type RenderContext struct {
-	Session    *session.Session
-	Mode       statusbar.Mode
-	Ports      []statusbar.PortInfo
-	ShowHelp   bool
-	CopyMode   bool
-	CopyOverlay string
-	LockScreen bool
-	LockPrompt string
-	WindowList bool
+	Session           *session.Session
+	Pinned            *session.Tab // render only this tab (a client attached to one app)
+	Mode              statusbar.Mode
+	Ports             []statusbar.PortInfo
+	ShowHelp          bool
+	CopyMode          bool
+	CopyOverlay       string
+	LockScreen        bool
+	LockPrompt        string
+	WindowList        bool
 	WindowListOverlay string
-	Width      int
-	Height     int
+	Width             int
+	Height            int
 }
 
 // RenderFrame produces the full ANSI screen string for a client.
@@ -40,14 +41,21 @@ func RenderFrame(ctx *RenderContext) string {
 
 	var lines []string
 
-	// Tab bar — only shown when 2+ tabs exist
+	// Tab bar — only shown when 2+ tabs exist. A pinned client sees just its
+	// own tab there, keeping the pane area the same size as everyone else's.
 	if ctx.Session.ShowTabBar() {
-		tabNames := ctx.Session.TabNames()
-		lines = append(lines, tabbar.Render(tabNames, ctx.Session.ActiveTab, ctx.Width))
+		if ctx.Pinned != nil {
+			lines = append(lines, tabbar.Render([]string{ctx.Pinned.Name}, 0, ctx.Width))
+		} else {
+			lines = append(lines, tabbar.Render(ctx.Session.TabNames(), ctx.Session.ActiveTab, ctx.Width))
+		}
 	}
 
 	// Pane area
 	tab := ctx.Session.CurrentTab()
+	if ctx.Pinned != nil {
+		tab = ctx.Pinned
+	}
 	if tab != nil {
 		cols, rows := ctx.Session.PaneArea()
 		paneArea := renderPanes(tab, cols, rows)

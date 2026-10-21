@@ -224,7 +224,8 @@ sax net up                   # start v1's apps (./.sax.lan) in session v1, one t
                              #   each tab is a shell in that app's network with its cmd typed
                              #   in: Ctrl+C stops the app, Up+Enter starts it again
 sax net up -f v2.lan -d      # same app, another version, same ports; -d stays detached
-sax -a v2                    # open v2's view later
+sax -a v2                    # open v2's view later (all its apps as tabs)
+sax -a v2.api                # or just one app: only its tab, tab keys do nothing
 sax net ls                   # routers
 sax net inspect v1           # sessions, IPs, rules, host URLs
 sax net down v1              # stop v1's apps

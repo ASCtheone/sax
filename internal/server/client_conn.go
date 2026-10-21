@@ -44,6 +44,10 @@ type ClientConn struct {
 	lockInput  string
 	windowList bool
 
+	// pinned is the tab this client is limited to (AttachMsg.Tab), or nil
+	// for the whole session. See client_pin.go.
+	pinned *session.Tab
+
 	// Copy mode navigator (set when in copy mode)
 	copyNav *scrollback.Navigator
 
@@ -157,7 +161,17 @@ func (cc *ClientConn) renderLoop() {
 func (cc *ClientConn) sendFrame() {
 	var frame string
 	var w, h int
-	cc.ms.WithLock(func() { frame, w, h = cc.buildFrame() })
+	gone := false
+	cc.ms.WithLock(func() {
+		if gone = cc.pinGone(); !gone {
+			frame, w, h = cc.buildFrame()
+		}
+	})
+	if gone {
+		_ = cc.writer.WriteMsg(MsgSessionEvent, &SessionEventMsg{Event: EventSessionClosed})
+		cc.Close()
+		return
+	}
 	if frame == "" {
 		return
 	}
@@ -201,6 +215,7 @@ func (cc *ClientConn) buildFrame() (string, int, int) {
 
 	ctx := &RenderContext{
 		Session:    cc.ms.Session,
+		Pinned:     cc.pinned,
 		Mode:       mode,
 		Ports:      cc.ms.Ports,
 		ShowHelp:   cc.showHelp,
@@ -286,6 +301,11 @@ func (cc *ClientConn) dispatch(env *Envelope) {
 
 // handleAttach processes the initial attach handshake.
 func (cc *ClientConn) handleAttach(msg AttachMsg) {
+	if msg.Tab != "" && !cc.pin(msg.Tab) {
+		_ = cc.writer.WriteMsg(MsgError, &ErrorMsg{Message: fmt.Sprintf("no tab %q in session %q", msg.Tab, cc.ms.Name)})
+		cc.Close()
+		return
+	}
 	cc.SetSize(msg.W, msg.H)
 	cc.ms.recalcSize()
 
@@ -295,6 +315,7 @@ func (cc *ClientConn) handleAttach(msg AttachMsg) {
 
 	ctx := &RenderContext{
 		Session: cc.ms.Session,
+		Pinned:  cc.pinned,
 		Width:   w,
 		Height:  h,
 	}
@@ -304,6 +325,7 @@ func (cc *ClientConn) handleAttach(msg AttachMsg) {
 		Name:      cc.ms.Name,
 		Tabs:      tabNames,
 		ActiveTab: cc.ms.Session.ActiveTab,
+		Tab:       msg.Tab,
 		Frame:     frame,
 		W:         w,
 		H:         h,
@@ -334,7 +356,7 @@ func (cc *ClientConn) handleKeyInput(msg KeyInputMsg) {
 		cc.MarkDirty()
 	}
 
-	pane := cc.ms.Session.ActivePane()
+	pane := cc.pane()
 	if pane != nil && !pane.HasExited {
 		_, _ = pane.Pty.Write(msg.Data)
 	}
@@ -411,7 +433,7 @@ func (cc *ClientConn) handleCopyModeInput(data []byte) {
 
 // handleMouseWheel scrolls the scrollback buffer.
 func (cc *ClientConn) handleMouseWheel(msg MouseWheelMsg) {
-	pane := cc.ms.Session.ActivePane()
+	pane := cc.pane()
 	if pane == nil {
 		return
 	}
@@ -452,6 +474,9 @@ func (cc *ClientConn) handleResize(msg ResizeMsg) {
 
 // handleCommand processes commands from the client.
 func (cc *ClientConn) handleCommand(msg CommandMsg) {
+	if cc.pinned != nil && tabCommand(msg.Cmd) {
+		return
+	}
 	switch msg.Cmd {
 	case CmdCreateTab:
 		hadTabBar := cc.ms.Session.ShowTabBar()
@@ -501,7 +526,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		}
 
 	case CmdSplitV:
-		tab := cc.ms.Session.CurrentTab()
+		tab := cc.tab()
 		if tab == nil {
 			return
 		}
@@ -516,7 +541,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.ms.MarkDirty()
 
 	case CmdSplitH:
-		tab := cc.ms.Session.CurrentTab()
+		tab := cc.tab()
 		if tab == nil {
 			return
 		}
@@ -531,7 +556,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.ms.MarkDirty()
 
 	case CmdClosePane:
-		tab := cc.ms.Session.CurrentTab()
+		tab := cc.tab()
 		if tab == nil {
 			return
 		}
@@ -545,7 +570,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		paneID := tab.ActivePane
 		alive := tab.RemovePane(paneID)
 		if !alive {
-			sess.RemoveTab(sess.ActiveTab)
+			sess.RemoveTab(tabIndex(sess, tab))
 			if len(sess.Tabs) == 0 {
 				cc.ms.broadcastEvent(EventSessionClosed, "")
 				cc.srv.sessions.Remove(cc.ms.Name)
@@ -562,7 +587,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.ms.MarkDirty()
 
 	case CmdNavPane:
-		tab := cc.ms.Session.CurrentTab()
+		tab := cc.tab()
 		if tab == nil {
 			return
 		}
@@ -590,7 +615,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.ms.MarkDirty()
 
 	case CmdZoom:
-		tab := cc.ms.Session.CurrentTab()
+		tab := cc.tab()
 		if tab == nil {
 			return
 		}
@@ -621,7 +646,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.MarkDirty()
 
 	case CmdEnterCopyMode:
-		pane := cc.ms.Session.ActivePane()
+		pane := cc.pane()
 		if pane == nil {
 			return
 		}
@@ -633,14 +658,14 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 	case CmdPaste:
 		content := cc.ms.GetCopyBuffer()
 		if content != "" {
-			pane := cc.ms.Session.ActivePane()
+			pane := cc.pane()
 			if pane != nil && !pane.HasExited {
 				_, _ = pane.Pty.Write([]byte(content))
 			}
 		}
 
 	case CmdToggleLog:
-		pane := cc.ms.Session.ActivePane()
+		pane := cc.pane()
 		if pane == nil {
 			return
 		}
@@ -650,7 +675,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.ms.MarkDirty()
 
 	case CmdHardcopy:
-		pane := cc.ms.Session.ActivePane()
+		pane := cc.pane()
 		if pane != nil {
 			content := pane.Render()
 			if path, err := logger.Hardcopy(content); err == nil {
@@ -674,7 +699,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.MarkDirty()
 
 	case CmdMonitorAct:
-		pane := cc.ms.Session.ActivePane()
+		pane := cc.pane()
 		if pane == nil {
 			return
 		}
@@ -684,7 +709,7 @@ func (cc *ClientConn) handleCommand(msg CommandMsg) {
 		cc.ms.MarkDirty()
 
 	case CmdMonitorSil:
-		pane := cc.ms.Session.ActivePane()
+		pane := cc.pane()
 		if pane == nil {
 			return
 		}
@@ -748,7 +773,7 @@ func (cc *ClientConn) handleLockInput(data []byte) {
 // mode. Lines are ANSI-aware: scrollback stores SGR styling now, so we
 // use visible-column truncation/padding instead of byte length.
 func (cc *ClientConn) renderScrollback(w, h int) string {
-	pane := cc.ms.Session.ActivePane()
+	pane := cc.pane()
 	if pane == nil {
 		return ""
 	}

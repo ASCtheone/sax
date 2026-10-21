@@ -383,7 +383,7 @@ func parseArgs(args []string) parsedArgs {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, `
 usage: sax                          interactive session picker
-       sax -a <name>                attach to session
+       sax -a <name>                attach to session (<router>.<app>: just that app)
        sax -c <name>                create session (detached)
        sax -ca <name>               create + attach
        sax -x <name> <command...>   run command in new session (detached)
@@ -408,7 +408,8 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
 
    net: sax net up [-f file] [-d]    start the apps of ./.sax.lan (or -f file) as tabs of a
                                     session named after the router, and attach (-d: detached;
-                                    later: sax -a <router>; sax --tail <router>.<app>)
+                                    later: sax -a <router>, or one app: sax -a <router>.<app>;
+                                    sax --tail <router>.<app>)
        sax net down <router>        stop a router's apps
        sax net                      list routers (sax net help for every command)
        sax net inspect <router>     IPs, routes and the URLs to open
@@ -696,12 +697,15 @@ func doCreateSession(name string, attach bool, extraEnv ...string) {
 	}
 }
 
+// doAttach attaches to a session, or to one app of a sax net up router:
+// "v1" shows all of router v1's apps as tabs, "v1.api" only the api app.
 func doAttach(name string) {
-	if !ipc.IsSessionAlive(name) {
+	session, tab, ok := ipc.ResolveTarget(name)
+	if !ok {
 		fmt.Fprintf(os.Stderr, "sax: session %q not found. Use 'sax -l' to list sessions.\n", name)
 		os.Exit(1)
 	}
-	connectClient(name)
+	connectClientTab(session, tab)
 }
 
 func doExecSession(name string, command []string, attach bool, workDir string, extraEnv ...string) {
@@ -1488,13 +1492,19 @@ func waitForSession(name string) bool {
 }
 
 func connectClient(name string) {
+	connectClientTab(name, "")
+}
+
+// connectClientTab attaches to a session; a non-empty tab limits the view
+// to that tab.
+func connectClientTab(name, tab string) {
 	conn, err := ipc.Dial(name)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sax: cannot connect to session %q: %v\n", name, err)
 		os.Exit(1)
 	}
 
-	model := client.New(conn)
+	model := client.New(conn, tab)
 
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
 	// Mouse support is on unless ~/.saxrc explicitly sets "mouse off".
@@ -1509,7 +1519,13 @@ func connectClient(name string) {
 		fmt.Fprintf(os.Stderr, "sax: %v\n", err)
 		os.Exit(1)
 	}
-
+	if msg := model.Err(); msg != "" {
+		fmt.Fprintf(os.Stderr, "sax: %s\n", msg)
+		os.Exit(1)
+	}
+	if tab != "" {
+		name += "." + tab
+	}
 	fmt.Println("[detached from session " + name + "]")
 }
 
