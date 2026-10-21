@@ -83,6 +83,31 @@ func (s *Session) AddCommandTab(name, cmd string, args []string, workDir string,
 	return tab, nil
 }
 
+// ReplaceTab starts a named command tab in old's place (same position, same
+// focus) and returns it. old is taken out of the session but left running;
+// the caller stops and closes it.
+func (s *Session) ReplaceTab(old *Tab, name, cmd string, args []string, workDir string, env []string) (*Tab, error) {
+	idx := -1
+	for i, t := range s.Tabs {
+		if t == old {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return nil, fmt.Errorf("tab %s is not in the session", old.Name)
+	}
+	cols, rows := s.PaneArea()
+	tab, err := NewTabWithCommandEnv(cols, rows, cmd, args, workDir, env)
+	if err != nil {
+		return nil, err
+	}
+	tab.Name = name
+	tabs := append([]*Tab{}, s.Tabs...)
+	tabs[idx] = tab
+	s.Tabs = tabs
+	return tab, nil
+}
+
 // NewSessionWithTab creates a session whose first tab is named and runs a
 // command with extra environment.
 func NewSessionWithTab(cols, rows int, tabName, cmd string, args []string, workDir string, env []string) (*Session, error) {

@@ -413,6 +413,8 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
                                     attach (-d: detached; later: sax -a <router>, or one app:
                                     sax -a <router>.<app>; sax --tail <router>.<app>)
        sax net projects             projects of ./.sax.lan, ~/.sax.net and ones brought up before
+       sax net restart [project] [app...]
+                                    kill and restart apps (all without app); any folder
        sax net logs [project] [app...] [-f]
                                     apps' output compose style (-f: follow); any folder
        sax net down <router|project> stop a router's apps

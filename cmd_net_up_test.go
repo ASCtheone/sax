@@ -20,12 +20,14 @@ type launched struct {
 }
 
 type fakeRunner struct {
-	addTabErr error
-	alive     map[string]bool
-	launched  map[string]launched
-	tabs      map[string][]server.TabSpec
-	attached  []string
-	killed    []string
+	addTabErr  error
+	replaceErr error
+	replaced   []server.TabSpec
+	alive      map[string]bool
+	launched   map[string]launched
+	tabs       map[string][]server.TabSpec
+	attached   []string
+	killed     []string
 }
 
 func newFakeRunner() *fakeRunner {
@@ -54,6 +56,19 @@ func (f *fakeRunner) AddTab(name string, tab server.TabSpec) (bool, error) {
 	}
 	f.tabs[name] = append(f.tabs[name], tab)
 	return false, nil
+}
+func (f *fakeRunner) ReplaceTab(name string, tab server.TabSpec) (int, error) {
+	if f.replaceErr != nil {
+		return 0, f.replaceErr
+	}
+	for i, t := range f.tabs[name] {
+		if t.Name == tab.Name {
+			f.tabs[name][i] = tab
+			f.replaced = append(f.replaced, tab)
+			return 2, nil
+		}
+	}
+	return 0, errNoTab
 }
 func (f *fakeRunner) Attach(name string) { f.attached = append(f.attached, name) }
 func (f *fakeRunner) Kill(name string) {

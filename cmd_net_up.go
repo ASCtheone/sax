@@ -30,6 +30,9 @@ type sessionRunner interface {
 	// AddTab adds a tab to a running session unless one with that name
 	// exists (existed reports which).
 	AddTab(name string, tab server.TabSpec) (existed bool, err error)
+	// ReplaceTab restarts a tab: a fresh one from tab replaces it once the
+	// old one's processes are stopped (how many is returned).
+	ReplaceTab(name string, tab server.TabSpec) (killed int, err error)
 	// Attach opens the session in this terminal until the user detaches.
 	Attach(name string)
 	Kill(name string)
@@ -72,6 +75,28 @@ func (daemonRunner) AddTab(name string, tab server.TabSpec) (bool, error) {
 	}
 	existed, _ := reply["existed"].(bool)
 	return existed, nil
+}
+func (daemonRunner) ReplaceTab(name string, tab server.TabSpec) (int, error) {
+	data, err := json.Marshal(tab)
+	if err != nil {
+		return 0, fmt.Errorf("encode tab: %w", err)
+	}
+	reply := ipc.QuerySessionTyped(name, server.QueryReplaceTab, string(data))
+	if reply == nil {
+		return 0, fmt.Errorf("session %q did not answer", name)
+	}
+	if _, understood := reply["ok"]; !understood {
+		return 0, errReplaceUnsupported // a session from an older sax
+	}
+	if ok, _ := reply["ok"].(bool); !ok {
+		msg, _ := reply["error"].(string)
+		if strings.HasPrefix(msg, "no tab ") {
+			return 0, errNoTab
+		}
+		return 0, errors.New(msg)
+	}
+	killed, _ := reply["killed"].(float64)
+	return int(killed), nil
 }
 func (daemonRunner) Attach(name string) { connectClient(name) }
 func (daemonRunner) Kill(name string)   { killSessionQuiet(name) }
@@ -148,34 +173,15 @@ func netJoin(s vnet.Store, saxName, netFlag, ip string) ([]string, vnet.Member, 
 // tabs for apps that are not running yet. With attach it then opens that
 // session.
 func netUp(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef, attach bool) error {
-	p, err := resolveProject(ref)
+	u, err := prepareProject(w, s, run, ref)
 	if err != nil {
 		return err
 	}
-	e := p.EnvFile
-	plan, warnings, err := e.Plan()
-	if err != nil {
-		return fmt.Errorf("%s: %w", p.label(), err)
-	}
-	if src, err := filepath.Abs(p.Source); err == nil {
-		plan = plan.WithSource(src, p.Name)
-	}
-	paths, err := installShim()
-	if err != nil {
-		return err
-	}
-	if w := supervisionWarning(paths); w != "" {
-		warnings = append(warnings, w)
-	}
-	stopLegacyApps(w, s, run, plan)
-	r, err := applyPlan(s, plan, explicitIPs(e))
-	if err != nil {
-		return err
-	}
+	e, r, warnings := u.env, u.router, u.warnings
 
 	tabs := make([]server.TabSpec, 0, len(e.Sessions))
 	for _, host := range e.SessionNames() {
-		tabs = append(tabs, appTab(s, r, paths, host, e.Sessions[host]))
+		tabs = append(tabs, u.tab(host))
 	}
 	status, err := startView(s, run, r, tabs)
 	if err != nil {
@@ -201,6 +207,52 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef, attach 
 		run.Attach(r.Name)
 	}
 	return nil
+}
+
+// preparedProject is a project whose router matches its file, ready for its
+// apps' tabs to be started.
+type preparedProject struct {
+	project
+	env      vnet.EnvFile
+	router   vnet.Router
+	paths    shim.Paths
+	warnings []string
+	store    vnet.Store
+}
+
+// tab is the TabSpec of one of the project's apps.
+func (u preparedProject) tab(host string) server.TabSpec {
+	return appTab(u.store, u.router, u.paths, host, u.env.Sessions[host])
+}
+
+// prepareProject resolves a project and creates or updates its router from
+// the file (the source of truth for domain, routes and addresses).
+func prepareProject(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef) (preparedProject, error) {
+	p, err := resolveProject(ref)
+	if err != nil {
+		return preparedProject{}, err
+	}
+	e := p.EnvFile
+	plan, warnings, err := e.Plan()
+	if err != nil {
+		return preparedProject{}, fmt.Errorf("%s: %w", p.label(), err)
+	}
+	if src, err := filepath.Abs(p.Source); err == nil {
+		plan = plan.WithSource(src, p.Name)
+	}
+	paths, err := installShim()
+	if err != nil {
+		return preparedProject{}, err
+	}
+	if w := supervisionWarning(paths); w != "" {
+		warnings = append(warnings, w)
+	}
+	stopLegacyApps(w, s, run, plan)
+	r, err := applyPlan(s, plan, explicitIPs(e))
+	if err != nil {
+		return preparedProject{}, err
+	}
+	return preparedProject{project: p, env: e, router: r, paths: paths, warnings: warnings, store: s}, nil
 }
 
 // appTab is an app's tab: an interactive shell inside the app's network with
