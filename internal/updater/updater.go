@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -66,11 +67,53 @@ func CheckForUpdate(currentVersion string) (latestVersion string, downloadURL st
 }
 
 // IsNewer returns true if latest represents a newer version than current.
-// Both are expected to be tag strings like "v0.1.0-20250101-120000-abc1234".
+// Tags look like "v1.7.0", "v1.7.0-rc1" or "v0.1.0-20250101-120000-abc1234":
+// the numeric core is compared numerically, then a release beats its
+// pre-releases, and pre-release suffixes compare as text (dated ones sort).
+// If either tag is not of that form, any different tag counts as newer.
 func IsNewer(current, latest string) bool {
 	current = strings.TrimPrefix(current, "v")
 	latest = strings.TrimPrefix(latest, "v")
-	return latest != current && latest != ""
+	if latest == "" || latest == current {
+		return false
+	}
+	cur, curPre, ok1 := parseVersion(current)
+	lat, latPre, ok2 := parseVersion(latest)
+	if !ok1 || !ok2 {
+		return true
+	}
+	for i := range cur {
+		if cur[i] != lat[i] {
+			return lat[i] > cur[i]
+		}
+	}
+	switch {
+	case curPre == latPre:
+		return false
+	case latPre == "":
+		return true
+	case curPre == "":
+		return false
+	}
+	return latPre > curPre
+}
+
+// parseVersion splits "1.7.0-rc1" into [1 7 0] and "rc1". Missing minor or
+// patch numbers count as 0.
+func parseVersion(v string) (nums [3]int, pre string, ok bool) {
+	core, pre, _ := strings.Cut(v, "-")
+	parts := strings.Split(core, ".")
+	if len(parts) > len(nums) {
+		return nums, "", false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nums, "", false
+		}
+		nums[i] = n
+	}
+	return nums, pre, true
 }
 
 // DownloadAndReplace downloads the binary from url and replaces the running executable.
