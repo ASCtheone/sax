@@ -63,7 +63,9 @@ func TestNetToolArgs(t *testing.T) {
 	}{
 		"sax_net_up":       {map[string]interface{}{"file": "v1.yaml"}, "up -d -f v1.yaml"},
 		"sax_net_projects": {map[string]interface{}{}, "projects"},
-		"sax_net_down":     {map[string]interface{}{"router": "v1"}, "down v1"},
+		"sax_net_logs": {map[string]interface{}{"project": "dev1", "app": "api", "lines": 20.0},
+			"logs dev1 api -n 20 --no-color"},
+		"sax_net_down": {map[string]interface{}{"router": "v1"}, "down v1"},
 		"sax_net_map": {map[string]interface{}{"router": "v1", "pattern": "bob.lan/*", "target": "web:4200"},
 			"map v1 bob.lan/* web:4200"},
 	}

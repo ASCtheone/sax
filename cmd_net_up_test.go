@@ -143,6 +143,9 @@ func TestNetUp_RunsAppsAsTabsWithNetworkEnv(t *testing.T) {
 	if env["NODE_ENV"] != "development" {
 		t.Error("session env from the file not passed")
 	}
+	if env["DISABLE_AUTO_UPDATE"] != "true" {
+		t.Error("oh-my-zsh's update prompt must not eat the typed app command")
+	}
 	if api.Dir != filepath.Join(filepath.Dir(path), "api") {
 		t.Errorf("dir = %s", api.Dir)
 	}

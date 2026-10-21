@@ -39,6 +39,7 @@ var (
 
 func main() {
 	args := os.Args[1:]
+	ipc.TargetAlias = netTargetAlias // sax -a/--tail/--send <project>[.app]
 
 	// Version flag (earliest check)
 	if len(args) > 0 && (args[0] == "--version" || args[0] == "-v") {
@@ -411,7 +412,9 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
                                     ~/.sax.net) as tabs of a session named after the router, and
                                     attach (-d: detached; later: sax -a <router>, or one app:
                                     sax -a <router>.<app>; sax --tail <router>.<app>)
-       sax net projects             projects of ./.sax.lan and ~/.sax.net
+       sax net projects             projects of ./.sax.lan, ~/.sax.net and ones brought up before
+       sax net logs [project] [app...] [-f]
+                                    apps' output compose style (-f: follow); any folder
        sax net down <router|project> stop a router's apps
        sax net                      list routers (sax net help for every command)
        sax net inspect <router>     IPs, routes and the URLs to open

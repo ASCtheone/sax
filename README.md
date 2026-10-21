@@ -230,6 +230,8 @@ sax net ls                   # routers
 sax net inspect v1           # sessions, IPs, rules, host URLs
 sax net down v1              # stop v1's apps
 sax --tail v1.api 20         # an app's output (its tab in session v1)
+sax net logs v1              # every app's output, compose style: "api | ...", "web | ..."
+sax net logs v1 api -f       # one app, following (-n N|all: backlog per app, default 100)
 sax net check                # validate ./.sax.lan (e.g. warns about rules that can never match)
 ```
 
@@ -260,6 +262,12 @@ sax net down dev2            # a project or router name
 
 A local `./.sax.lan` wins over `~/.sax.net` (also for a project of the same
 name), and any env file may use `projects:`.
+
+Every project command works from any folder: `up`, `down`, `check`,
+`logs`, `inspect` and `rm` take project names, and so do `sax -a`,
+`--tail` and `--send` (`sax -a dev2.api`, even when dev2's router is named
+`two`). A project from a folder's `.sax.lan` is found by name once it has
+been brought up there.
 
 ```bash
 sax net create lab --subnet 10.20.0.0/24 --domain lan

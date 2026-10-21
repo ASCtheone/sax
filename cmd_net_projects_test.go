@@ -13,6 +13,7 @@ import (
 // No test may read the developer's real ~/.sax.net.
 func TestMain(m *testing.M) {
 	globalEnvFile = func() string { return filepath.Join(os.TempDir(), "sax-test-no-global.net") }
+	knownRouters = func() []vnet.Router { return nil }
 	os.Exit(m.Run())
 }
 

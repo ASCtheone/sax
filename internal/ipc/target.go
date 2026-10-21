@@ -10,8 +10,20 @@ import (
 // session "v1" (a router view started by sax net up). ok is false when
 // neither exists.
 func ResolveTarget(name string) (session, tab string, ok bool) {
-	return resolveTarget(name, IsSessionAlive)
+	if session, tab, ok = resolveTarget(name, IsSessionAlive); ok {
+		return session, tab, true
+	}
+	if TargetAlias != nil {
+		if alias, found := TargetAlias(name); found && alias != name {
+			return resolveTarget(alias, IsSessionAlive)
+		}
+	}
+	return name, "", false
 }
+
+// TargetAlias, when set, renames a target that is not a session, e.g. a
+// vnet project ("dev2", "dev2.api") whose router has another name.
+var TargetAlias func(name string) (string, bool)
 
 func resolveTarget(name string, alive func(string) bool) (string, string, bool) {
 	if alive(name) {

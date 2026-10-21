@@ -30,6 +30,10 @@ type Router struct {
 	View     string            `json:"view,omitempty"` // sax session showing one tab per app
 	Dirs     map[string]string `json:"dirs,omitempty"` // session name -> its folder (for the banner)
 	Banner   Banner            `json:"banner,omitempty"`
+	// Source is the env file the router was last brought up from, and
+	// Project its project there, so sax net finds it from any folder.
+	Source  string `json:"source,omitempty"`
+	Project string `json:"project,omitempty"`
 }
 
 // NewRouter validates and builds an empty router.
@@ -203,6 +207,13 @@ func (r Router) WithDir(name, dir string) Router {
 func (r Router) WithBanner(b Banner) Router {
 	out := r.clone()
 	out.Banner = b
+	return out
+}
+
+// WithSource records the env file and project the router comes from.
+func (r Router) WithSource(path, project string) Router {
+	out := r.clone()
+	out.Source, out.Project = path, project
 	return out
 }
 
