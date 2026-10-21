@@ -157,6 +157,9 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef, attach 
 	if err != nil {
 		return fmt.Errorf("%s: %w", p.label(), err)
 	}
+	if src, err := filepath.Abs(p.Source); err == nil {
+		plan = plan.WithSource(src, p.Name)
+	}
 	paths, err := installShim()
 	if err != nil {
 		return err
@@ -206,6 +209,9 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef, attach 
 func appTab(s vnet.Store, r vnet.Router, paths shim.Paths, host string, spec vnet.SessionSpec) server.TabSpec {
 	m := vnet.Member{Router: r.Name, Host: host, IP: r.Sessions[host], Subnet: r.Subnet, Dir: s.RouterDir(r.Name)}
 	env := vnet.DaemonEnv(m, paths)
+	// oh-my-zsh's "update? [Y/n]" prompt would swallow the typed app
+	// command; the file's env can still turn updates back on.
+	env = append(env, "DISABLE_AUTO_UPDATE=true")
 	keys := make([]string, 0, len(spec.Env))
 	for k := range spec.Env {
 		keys = append(keys, k)
@@ -288,7 +294,7 @@ func applyPlan(s vnet.Store, plan vnet.Router, explicit map[string]bool) (vnet.R
 		if err != nil {
 			return cur, err
 		}
-		next = next.WithView(cur.View).WithBanner(plan.Banner)
+		next = next.WithView(cur.View).WithBanner(plan.Banner).WithSource(plan.Source, plan.Project)
 		// Hand-joined sessions keep their addresses; planned ones are placed
 		// after them so a clash is reported instead of silently moved.
 		for _, host := range cur.SortedSessions() {
@@ -394,9 +400,7 @@ func netDown(w io.Writer, s vnet.Store, run sessionRunner, routerName string) er
 // name, or the project an env file (or this folder) gives.
 func routerFromArgs(s vnet.Store, ref projectRef) (string, error) {
 	if ref.Name != "" && ref.File == "" {
-		if _, err := s.Get(ref.Name); err == nil {
-			return ref.Name, nil
-		}
+		return routerFor(s, ref.Name)
 	}
 	p, err := resolveProject(ref)
 	if err != nil {

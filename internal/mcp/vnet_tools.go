@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -69,6 +70,29 @@ var netTools = []netTool{
 		props:       map[string]interface{}{"router": stringProp("Router name")},
 		required:    []string{"router"},
 		args:        func(p map[string]interface{}) []string { return []string{"inspect", str(p, "router")} },
+	},
+	{
+		name: "sax_net_logs",
+		description: "Recent output of a vnet project's apps, compose style (\"api | ...\"). " +
+			"Works from any folder; for live output use sax_tail on <router>.<app>.",
+		props: map[string]interface{}{
+			"project": stringProp("Project or router name (default: the current folder's project)"),
+			"app":     stringProp("Only this app (default: every app)"),
+			"lines":   map[string]interface{}{"type": "integer", "description": "Lines per app (default 100)"},
+		},
+		args: func(p map[string]interface{}) []string {
+			args := []string{"logs"}
+			if name := str(p, "project"); name != "" {
+				args = append(args, name)
+			}
+			if app := str(p, "app"); app != "" {
+				args = append(args, app)
+			}
+			if n, ok := p["lines"].(float64); ok && n > 0 {
+				args = append(args, "-n", strconv.Itoa(int(n)))
+			}
+			return append(args, "--no-color")
+		},
 	},
 	{
 		name: "sax_net_projects",

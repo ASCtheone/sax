@@ -14,6 +14,13 @@ import (
 // globalEnvFile is ~/.sax.net; swapped in tests.
 var globalEnvFile = vnet.GlobalEnvFile
 
+// knownRouters lists the routers on disk; their Source/Project say where a
+// project lives, so it is found by name from any folder. Swapped in tests.
+var knownRouters = func() []vnet.Router {
+	rs, _ := vnetStore().List()
+	return rs
+}
+
 // projectRef says which project a net command is about: an explicit file
 // (-f), a project name, and the folder the command runs in.
 type projectRef struct {
@@ -43,7 +50,8 @@ type project struct {
 // resolveProject finds the project to use:
 //   - with -f: that file (a projects file needs a name, or a project
 //     whose folders contain the current folder)
-//   - with a name: that project of ./.sax.lan, else of ~/.sax.net
+//   - with a name: that project of ./.sax.lan, else of ~/.sax.net, else
+//     of the file a router of that name (or project) was brought up from
 //   - else ./.sax.lan, else the project of ~/.sax.net covering this folder
 func resolveProject(ref projectRef) (project, error) {
 	if ref.Dir == "" {
@@ -66,6 +74,9 @@ func resolveProject(ref projectRef) (project, error) {
 			if e, ok := c.Project(ref.Name); ok {
 				return project{EnvFile: e, Name: ref.Name, Source: c.Path, Multi: c.Multi}, nil
 			}
+		}
+		if p, ok := knownProject(ref.Name); ok {
+			return p, nil
 		}
 		return project{}, fmt.Errorf("no project %q (%s)", ref.Name, describeConfigs(configs, ref.Dir))
 	}
@@ -189,8 +200,9 @@ func netProjects(w io.Writer, run sessionRunner, dir string) error {
 	if err != nil {
 		return err
 	}
+	configs = append(configs, knownConfigs(configs)...)
 	if len(configs) == 0 {
-		fmt.Fprintf(w, "no projects: no %s here and no %s\n", vnet.EnvFileName, displayPath(globalEnvFile()))
+		fmt.Fprintf(w, "no projects: no %s here, no %s and none brought up yet\n", vnet.EnvFileName, displayPath(globalEnvFile()))
 		return nil
 	}
 	here := ""
@@ -223,4 +235,67 @@ func (p project) label() string {
 		return displayPath(p.Source)
 	}
 	return displayPath(p.Source) + " (" + p.Name + ")"
+}
+
+// knownProject finds a project by name (or router name) in the file a
+// router was last brought up from, e.g. a .sax.lan in another folder.
+func knownProject(name string) (project, bool) {
+	for _, r := range knownRouters() {
+		if r.Source == "" || (r.Name != name && r.Project != name) {
+			continue
+		}
+		c, err := vnet.LoadConfig(r.Source)
+		if err != nil {
+			continue // moved or broken: not this folder's problem
+		}
+		pname := r.Project
+		if pname == "" {
+			pname = r.Name
+		}
+		if e, ok := c.Project(pname); ok {
+			return project{EnvFile: e, Name: pname, Source: c.Path, Multi: c.Multi}, true
+		}
+	}
+	return project{}, false
+}
+
+// knownConfigs loads the files routers came from that are not in skip.
+func knownConfigs(skip []vnet.Config) []vnet.Config {
+	var out []vnet.Config
+	for _, r := range knownRouters() {
+		if r.Source == "" || sameFile(r.Source, skip) || sameFile(r.Source, out) {
+			continue
+		}
+		if c, err := vnet.LoadConfig(r.Source); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// routerFor maps a router or project name to its router name, from any
+// folder: a router of that name, else a project's router.
+func routerFor(s vnet.Store, name string) (string, error) {
+	if _, err := s.Get(name); err == nil {
+		return name, nil
+	}
+	p, err := resolveProject(projectRef{Name: name})
+	if err != nil {
+		return "", fmt.Errorf("no router or project %q", name)
+	}
+	return p.Router, nil
+}
+
+// netTargetAlias maps "<project>[.<app>]" to "<router>[.<app>]" when the
+// project's router has another name (router: in ~/.sax.net).
+func netTargetAlias(name string) (string, bool) {
+	head, rest, _ := strings.Cut(name, ".")
+	r, err := routerFor(vnetStore(), head)
+	if err != nil || r == head {
+		return "", false
+	}
+	if rest != "" {
+		r += "." + rest
+	}
+	return r, true
 }

@@ -26,6 +26,9 @@ const netUsage = `usage: sax net                                 list routers
                                                  (-d: stay detached; sax -a <router> later,
                                                  or one app alone: sax -a <router>.<app>)
        sax net down <router|project> | -f <file> stop a router's sessions
+       sax net logs [project] [app...] [-f] [-n N|all] [--no-color]
+                                                 apps' output, "api | ..." (-f: follow; default:
+                                                 this folder's project, last 100 lines per app)
        sax net publish <router> <host-port> <target>
                                                  forward 127.0.0.1:<host-port> into the router
        sax net unpublish <router> <host-port>
@@ -47,8 +50,12 @@ rules: bob.lan/api/* -> api:3200   HTTP route, path forwarded unchanged
        db.lan:5432   -> db:5432    TCP mapping (no proxy)
        bob.lan       -> api:3200   TCP mapping on port 80`
 
+// Every command that takes a router also takes a project name (of
+// ./.sax.lan, ~/.sax.net, or the file a router was brought up from), so
+// they all work from any folder.
+
 // netFlagsWithValue are the sax net flags that consume the next argument.
-var netFlagsWithValue = map[string]bool{"--subnet": true, "--domain": true, "-f": true, "--port": true, "--addr": true}
+var netFlagsWithValue = map[string]bool{"--subnet": true, "--domain": true, "-f": true, "--port": true, "--addr": true, "-n": true}
 
 func vnetRoot() string { return filepath.Join(filepath.Dir(ipc.SessionsDir()), "vnet") }
 
@@ -72,9 +79,13 @@ func doNet(args []string) {
 	case "create":
 		err = netCreate(os.Stdout, vnetStore(), pos, flagValue(args, "--subnet"), flagValue(args, "--domain"))
 	case "rm", "remove":
-		err = netRemove(os.Stdout, vnetStore(), daemonRunner{}, pos)
+		if pos, err = routerArg(vnetStore(), pos); err == nil {
+			err = netRemove(os.Stdout, vnetStore(), daemonRunner{}, pos)
+		}
 	case "inspect", "show":
-		err = netInspect(os.Stdout, vnetStore(), pos)
+		if pos, err = routerArg(vnetStore(), pos); err == nil {
+			err = netInspect(os.Stdout, vnetStore(), pos)
+		}
 	case "map":
 		if err = netMap(os.Stdout, vnetStore(), pos); err == nil {
 			err = ensureGateway(os.Stdout, vnetStore(), daemonRunner{})
@@ -83,6 +94,11 @@ func doNet(args []string) {
 		err = netUnmap(os.Stdout, vnetStore(), pos)
 	case "check":
 		err = netCheck(os.Stdout, refFromArgs(pos, flagValue(args, "-f")))
+	case "logs":
+		var o logOpts
+		if o, err = logOptsFromArgs(args); err == nil {
+			err = netLogs(os.Stdout, vnetStore(), daemonRunner{}, pos, o)
+		}
 	case "projects":
 		dir, _ := os.Getwd()
 		err = netProjects(os.Stdout, daemonRunner{}, dir)
@@ -112,6 +128,19 @@ func doNet(args []string) {
 		fmt.Fprintf(os.Stderr, "sax net: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// routerArg maps a project name in pos[0] to its router, so router commands
+// take project names too.
+func routerArg(s vnet.Store, pos []string) ([]string, error) {
+	if len(pos) == 0 {
+		return pos, nil
+	}
+	r, err := routerFor(s, pos[0])
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{r}, pos[1:]...), nil
 }
 
 // netPositional returns args with flags (and their values) removed.
