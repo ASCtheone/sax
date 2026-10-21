@@ -22,41 +22,67 @@ var proxyTransport = func() *http.Transport {
 	return t
 }()
 
-// serveHost handles host-side requests: <host>.<router>.localhost always,
-// and names under registered domains (app1.lan, app1.v2.lan).
+// serveHost handles host-side requests by hostname alone: the route's host
+// (bob.lan) once its domain is registered, or <host>.localhost (browsers
+// send *.localhost to this machine) on the gateway port. Router names are
+// never part of a URL: the router is the one whose routes have the host.
 func (g *Gateway) serveHost(w http.ResponseWriter, req *http.Request) {
-	if routerName, host, ok := parseLocalhostHost(req.Host); ok {
-		g.serve(w, req, routerName, host)
+	host := hostOnlyLower(req.Host)
+	if h, ok := strings.CutSuffix(host, localhostSuffix); ok {
+		host = h
+	}
+	routerName, msg := g.routerForHost(host, req.URL.Path)
+	if routerName == "" {
+		http.Error(w, msg, http.StatusNotFound)
 		return
 	}
-	routerName, host, msg := g.resolveDomainHost(req.Host)
-	if routerName != "" {
-		g.serve(w, req, routerName, host)
-		return
-	}
-	if msg == "" {
-		msg = fmt.Sprintf("sax vnet gateway: use http://<host>.<router>%s or register a domain "+
-			"with sax net register (got %q)", localhostSuffix, req.Host)
-	}
-	http.Error(w, msg, http.StatusNotFound)
+	g.serve(w, req, routerName, host)
 }
 
-// parseLocalhostHost splits "bob.lan.v1.localhost[:port]" into router "v1"
-// and host "bob.lan".
-func parseLocalhostHost(hostHeader string) (router, host string, ok bool) {
-	h := strings.ToLower(hostHeader)
+// hostOnlyLower is a Host header without port or trailing dot, lowercased.
+func hostOnlyLower(h string) string {
+	h = strings.ToLower(h)
 	if name, _, err := net.SplitHostPort(h); err == nil {
 		h = name
 	}
-	rest, found := strings.CutSuffix(h, localhostSuffix)
-	if !found {
-		return "", "", false
+	return strings.TrimSuffix(h, ".")
+}
+
+// routerForHost picks the router serving host. When several routers have
+// the host (one is down but keeps its routes), the one whose app is
+// listening wins; two live ones are a conflict to fix in the projects.
+func (g *Gateway) routerForHost(host, path string) (string, string) {
+	owners := g.routersWithHTTPHost(host)
+	switch len(owners) {
+	case 0:
+		return "", fmt.Sprintf("sax vnet: no route for %s (see sax net projects / sax net inspect)", host)
+	case 1:
+		return owners[0], ""
 	}
-	i := strings.LastIndexByte(rest, '.')
-	if i <= 0 || i == len(rest)-1 {
-		return "", "", false
+	var live []string
+	for _, name := range owners {
+		r, ok := g.router(name)
+		if !ok {
+			continue
+		}
+		rules, err := r.ParsedRules()
+		if err != nil {
+			continue
+		}
+		if rule, ok := vnet.MatchHTTP(rules, host, path); ok {
+			if _, err := g.backend(r, rule.Target); err == nil {
+				live = append(live, name)
+			}
+		}
 	}
-	return rest[i+1:], rest[:i], true
+	switch len(live) {
+	case 0:
+		return owners[0], "" // serve explains what is not listening
+	case 1:
+		return live[0], ""
+	}
+	return "", fmt.Sprintf("sax vnet: %s is served by routers %s at once; give one of their projects "+
+		"another domain (domain: ...)", host, strings.Join(live, ", "))
 }
 
 // serve routes one request for host inside a router: first matching rule

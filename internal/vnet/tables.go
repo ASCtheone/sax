@@ -61,10 +61,7 @@ func (r Router) Tables() (Tables, []string) {
 
 	for _, name := range r.SortedSessions() {
 		ip := r.Sessions[name]
-		t.Names = append(t.Names, NameEntry{Name: name, IP: ip})
-		if r.Domain != "" {
-			t.Names = append(t.Names, NameEntry{Name: name + "." + r.Domain, IP: ip})
-		}
+		t.Names = append(t.Names, NameEntry{Name: name, IP: ip}) // the domain is for routes only
 	}
 
 	hosts := make([]string, 0, len(r.VIPs))

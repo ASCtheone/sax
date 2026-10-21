@@ -133,9 +133,13 @@ func TestGateway_DNSPerRouter(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	addrs, err := resolverFor(fmt.Sprintf("127.0.0.1:%d", port)).LookupHost(ctx, "web.lan")
+	res := resolverFor(fmt.Sprintf("127.0.0.1:%d", port))
+	addrs, err := res.LookupHost(ctx, "web.")
 	if err != nil || strings.Join(addrs, ",") != "10.12.12.5" {
-		t.Errorf("web.lan = %v, %v", addrs, err)
+		t.Errorf("web = %v, %v", addrs, err)
+	}
+	if addrs, err := res.LookupHost(ctx, "web.lan."); err == nil {
+		t.Errorf("apps get no <app>.<domain> name (the domain is for routes): %v", addrs)
 	}
 
 	if err := s.Remove("v1"); err != nil {

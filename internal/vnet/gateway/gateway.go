@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	// DefaultHostAddr serves http://<host>.<router>.localhost:7480 from the host.
+	// DefaultHostAddr serves http://<host>.localhost:7480 from the host.
 	DefaultHostAddr = "127.0.0.1:7480"
 	// SessionName is the sax session that runs the gateway.
 	SessionName = "vnet-gateway"

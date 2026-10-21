@@ -171,13 +171,15 @@ func TestTables(t *testing.T) {
 
 	names := tables.NamesFile()
 	for _, want := range []string{
-		"api 10.12.12.4\n", "api.lan 10.12.12.4\n",
-		"web 10.12.12.5\n", "web.lan 10.12.12.5\n",
+		"api 10.12.12.4\n", "web 10.12.12.5\n",
 		"bob.lan 10.12.12.254\n", "db.lan 10.12.12.253\n", "raw.lan 10.12.12.252\n",
 	} {
 		if !strings.Contains(names, want) {
 			t.Errorf("names file missing %q:\n%s", want, names)
 		}
+	}
+	if strings.Contains(names, "api.lan") {
+		t.Errorf("the domain is for routes only, apps get no <app>.<domain> name:\n%s", names)
 	}
 
 	svc := tables.ServicesFile()
@@ -209,5 +211,37 @@ func TestTables_ShadowWarning(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected shadow warning, got %v", warnings)
+	}
+}
+
+// A route hostname without a dot gets the router's domain (default lan);
+// a full hostname is kept as written.
+func TestWithRule_Domain(t *testing.T) {
+	r, err := NewRouter("v1", "10.12.12.0/24", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Domain != DefaultDomain {
+		t.Errorf("default domain = %q, want %q", r.Domain, DefaultDomain)
+	}
+	r, _, _ = r.WithSession("api", "")
+	for raw, want := range map[string]string{
+		"bob/api/* -> api:3200":     "bob.lan/api/* -> api:3200",
+		"db:5432 -> api:5432":       "db.lan:5432 -> api:5432",
+		"shop.test/* -> api:3200":   "shop.test/* -> api:3200",
+		"admin.lan/* -> api:3200":   "admin.lan/* -> api:3200",
+	} {
+		next, err := r.WithRule(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if got := next.Rules[len(next.Rules)-1]; got != want {
+			t.Errorf("%s -> %s, want %s", raw, got, want)
+		}
+	}
+	two, _ := NewRouter("v2", "10.12.12.0/24", "lan2")
+	two, _ = two.WithRule("bob/* -> 10.12.12.4:80")
+	if two.Rules[0] != "bob.lan2/* -> 10.12.12.4:80" {
+		t.Errorf("custom domain: %s", two.Rules[0])
 	}
 }

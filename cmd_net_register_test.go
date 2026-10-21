@@ -128,43 +128,34 @@ func TestNetUnregister_NothingRegistered(t *testing.T) {
 	}
 }
 
+// URLs are the route's hostname alone, never the router.
 func TestHostURL_RegisteredAndFallback(t *testing.T) {
 	installFakeHost(t, "darwin")
 	s := vnet.NewStore(t.TempDir())
-	for _, name := range []string{"v1", "v2"} {
-		r, _ := vnet.NewRouter(name, "10.12.12.0/24", "")
-		_ = s.Create(r)
-		_, _ = s.Update(name, func(r vnet.Router) (vnet.Router, error) {
-			r, _ = r.WithRule("app1.lan/* -> web:4200")
-			return r.WithRule("only" + name + ".lan/* -> web:4200")
-		})
-	}
-	v1, _ := s.Get("v1")
 
-	// Not registered: .localhost form with the gateway port.
-	if got := hostURL(s, vnet.Registration{}, v1, "app1.lan"); got != "http://app1.lan.v1.localhost:7480" {
+	// Not registered: <host>.localhost with the gateway port.
+	if got := hostURL(vnet.Registration{}, "app1.lan"); got != "http://app1.lan.localhost:7480" {
 		t.Errorf("fallback = %s", got)
 	}
-
 	reg, _ := vnet.Registration{}.With("lan")
-	if got := hostURL(s, reg, v1, "onlyv1.lan"); got != "http://onlyv1.lan:7480" {
-		t.Errorf("unique, no :80 = %s", got)
+	if got := hostURL(reg, "app1.lan"); got != "http://app1.lan:7480" {
+		t.Errorf("registered, no :80 = %s", got)
 	}
-	if got := hostURL(s, reg, v1, "app1.lan"); got != "http://app1.v1.lan:7480" {
-		t.Errorf("shared = %s", got)
+	if got := hostURL(reg, "shop.test"); got != "http://shop.test.localhost:7480" {
+		t.Errorf("a domain that is not registered = %s", got)
 	}
 
 	// With the gateway on :80 the port disappears.
 	_ = os.MkdirAll(vnetRoot(), 0o755)
 	_ = os.WriteFile(filepath.Join(vnetRoot(), gatewayStateFile), []byte(`{"pid":1,"addr":"127.0.0.1:7480","port80":true}`), 0o644)
-	if got := hostURL(s, reg, v1, "onlyv1.lan"); got != "http://onlyv1.lan" {
-		t.Errorf("unique with :80 = %s", got)
+	if got := hostURL(reg, "app1.lan"); got != "http://app1.lan" {
+		t.Errorf("registered with :80 = %s", got)
 	}
-	if st := registrationStatus(s); !strings.Contains(st, "run `sax net register`") {
+	if st := registrationStatus(s); !strings.Contains(st, "run `sax net register`") || strings.Contains(st, "<router>") {
 		t.Errorf("status without registration = %q", st)
 	}
 	_ = s.SaveRegistration(reg)
-	if st := registrationStatus(s); !strings.Contains(st, ".lan registered") {
+	if st := registrationStatus(s); !strings.Contains(st, ".lan registered") || strings.Contains(st, "<router>") {
 		t.Errorf("status = %q", st)
 	}
 }

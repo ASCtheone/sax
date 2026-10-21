@@ -81,7 +81,7 @@ func netRegister(w io.Writer, s vnet.Store, run sessionRunner, pos []string) err
 	}
 	plan, err := hostdns.RegisterPlan(hostdns.Env{GOOS: hostOS}, next.Domains, hostdns.DefaultDNSAddr)
 	if errors.Is(err, hostdns.ErrUnsupported) {
-		return fmt.Errorf("%w; keep using http://<host>.<router>.localhost%s", err, portSuffix(gateway.DefaultHostAddr))
+		return fmt.Errorf("%w; keep using http://<host>.localhost%s", err, portSuffix(gateway.DefaultHostAddr))
 	}
 	if err != nil {
 		return err
@@ -138,7 +138,7 @@ func netUnregister(w io.Writer, s vnet.Store, pos []string) error {
 	if err := s.SaveRegistration(next); err != nil {
 		return err
 	}
-	fmt.Fprintf(w, "unregistered %s; apps stay reachable at http://<host>.<router>.localhost%s\n",
+	fmt.Fprintf(w, "unregistered %s; apps stay reachable at http://<host>.localhost%s\n",
 		dotted(removed), portSuffix(gatewayAddr()))
 	return nil
 }
@@ -167,38 +167,14 @@ func dotted(domains []string) string {
 	return strings.Join(out, " ")
 }
 
-// hostURL is how a router's HTTP host is reached from the host machine:
-// http://app1.lan when its domain is registered (app1.v2.lan if several
-// routers have app1.lan), otherwise http://app1.lan.v2.localhost:7480.
-func hostURL(s vnet.Store, reg vnet.Registration, r vnet.Router, host string) string {
-	domain, ok := reg.Covers(host)
-	if !ok {
-		return fmt.Sprintf("http://%s.%s.localhost%s", host, r.Name, portSuffix(gatewayAddr()))
+// hostURL is how an HTTP route host is reached from this machine: by its
+// name alone, http://app1.lan once its domain is registered, otherwise
+// http://app1.lan.localhost:7480. The router never appears in it.
+func hostURL(reg vnet.Registration, host string) string {
+	if _, ok := reg.Covers(host); ok {
+		return "http://" + host + portSuffixFor80()
 	}
-	name := host
-	if sharedHost(s, host) {
-		name = gateway.WithRouter(host, r.Name, domain)
-	}
-	return "http://" + name + portSuffixFor80()
-}
-
-// sharedHost reports whether more than one router has the HTTP host.
-func sharedHost(s vnet.Store, host string) bool {
-	routers, err := s.List()
-	if err != nil {
-		return false
-	}
-	n := 0
-	for _, r := range routers {
-		tables, _ := r.Tables()
-		for _, h := range tables.HTTP {
-			if h.Host == host {
-				n++
-				break
-			}
-		}
-	}
-	return n > 1
+	return "http://" + host + ".localhost" + portSuffix(gatewayAddr())
 }
 
 // portSuffixFor80 is "" when the gateway serves :80, else its port.
@@ -213,9 +189,8 @@ func portSuffixFor80() string {
 func registrationStatus(s vnet.Store) string {
 	reg, err := s.Registration()
 	if err != nil || len(reg.Domains) == 0 {
-		return fmt.Sprintf("host names: http://<host>.<router>.localhost%s (run `sax net register` for http://<host>.%s)",
-			portSuffix(gatewayAddr()), defaultDomain)
+		return fmt.Sprintf("host names: http://<host>.localhost%s (run `sax net register` for http://<host>)",
+			portSuffix(gatewayAddr()))
 	}
-	return fmt.Sprintf("host names: %s registered -> http://<host>%s, or http://<host>.<router>.%s when shared",
-		dotted(reg.Domains), portSuffixFor80(), reg.Domains[0])
+	return fmt.Sprintf("host names: %s registered -> http://<host>%s", dotted(reg.Domains), portSuffixFor80())
 }

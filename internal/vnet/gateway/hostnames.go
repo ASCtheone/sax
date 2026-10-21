@@ -2,11 +2,9 @@ package gateway
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"sort"
-	"strings"
 	"sync/atomic"
 
 	"github.com/asc/sax/internal/vnet"
@@ -132,56 +130,6 @@ func (g *Gateway) notifyPort80(on bool) {
 func portOf(addr string) string {
 	_, port, _ := net.SplitHostPort(addr)
 	return port
-}
-
-// resolveDomainHost maps a Host under a registered domain to a router:
-//
-//	app1.lan       -> the one router with an HTTP host app1.lan
-//	app1.v2.lan    -> router v2, host app1.lan (needed when several have it)
-//
-// On failure it returns a message for the user instead.
-func (g *Gateway) resolveDomainHost(hostHeader string) (router, host, msg string) {
-	reg := g.registration.Load()
-	domain, ok := reg.Covers(hostHeader)
-	if !ok {
-		return "", "", ""
-	}
-	h := strings.ToLower(hostHeader)
-	if name, _, err := net.SplitHostPort(h); err == nil {
-		h = name
-	}
-	h = strings.TrimSuffix(h, ".")
-
-	owners := g.routersWithHTTPHost(h)
-	switch len(owners) {
-	case 1:
-		return owners[0], h, ""
-	case 0:
-	default:
-		var opts []string
-		for _, r := range owners {
-			opts = append(opts, "http://"+WithRouter(h, r, domain))
-		}
-		return "", "", fmt.Sprintf("sax vnet: %s exists in several routers; pick one:\n  %s", h,
-			strings.Join(opts, "\n  "))
-	}
-
-	// <name>.<router>.<domain>
-	rest := strings.TrimSuffix(h, "."+domain)
-	if i := strings.LastIndexByte(rest, '.'); i > 0 {
-		r, base := rest[i+1:], rest[:i]+"."+domain
-		for _, owner := range g.routersWithHTTPHost(base) {
-			if owner == r {
-				return r, base, ""
-			}
-		}
-	}
-	return "", "", fmt.Sprintf("sax vnet: no route for %s", h)
-}
-
-// WithRouter inserts the router label before the domain: app1.lan -> app1.v2.lan.
-func WithRouter(host, router, domain string) string {
-	return strings.TrimSuffix(host, "."+domain) + "." + router + "." + domain
 }
 
 func (g *Gateway) routersWithHTTPHost(host string) []string {

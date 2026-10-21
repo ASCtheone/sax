@@ -203,9 +203,9 @@ on `:3200` and each resolves `api`, `db`, `bob.lan` to its own copies.
 
 ```yaml
 # .sax.lan in your project: `sax net up` picks it up (or -f other-file)
-router: v1
+router: v1                     # the network: sax -a v1, sax net logs v1 (never in a URL)
 subnet: 10.12.12.0/24
-domain: lan
+domain: lan                    # optional (default lan): the domain of route hostnames
 sessions:
   api: { cwd: ./api, cmd: "npm run start:dev" }
   web: { cwd: ./web, cmd: "ng serve" }
@@ -213,9 +213,10 @@ sessions:
   shop: { nx: shop }           # nx task: nx run shop:serve (or shop:serve:development)
   docs: { npm: docs:dev }      # npm script: npm run docs:dev
 routes:                        # checked in order, first match wins
-  - bob.lan/api/* -> api:3200  # HTTP route, path forwarded unchanged
-  - bob.lan/*     -> web:4200
-  - db.lan:5432   -> db:5432   # TCP mapping, no proxy
+  - bob/api/* -> api:3200      # HTTP route on bob.lan (bob + domain), path forwarded unchanged
+  - bob/*     -> web:4200
+  - db:5432   -> db:5432       # TCP mapping on db.lan, no proxy
+  - shop.test/* -> web:4200    # a full hostname is used as written
 publish:
   - 15432 -> db:5432           # 127.0.0.1:15432 on the host
 ```
@@ -225,7 +226,7 @@ sax net up                   # start v1's apps (./.sax.lan) in session v1, one t
                              #   Ctrl+S n/p or 1-9 switch tabs, Ctrl+S d detaches
                              #   each tab is a shell in that app's network with its cmd typed
                              #   in: Ctrl+C stops the app, Up+Enter starts it again
-sax net up -f v2.lan -d      # same app, another version, same ports; -d stays detached
+sax net up -f v2.lan -d      # another version, same ports, with domain: lan2 -> bob.lan2
 sax -a v2                    # open v2's view later (all its apps as tabs)
 sax -a v2.api                # or just one app: only its tab, tab keys do nothing
 sax net ls                   # routers
@@ -295,19 +296,28 @@ sax net publish lab 15432 db:5432
 sax -x api --net lab npm run dev          # any session can join a router
 ```
 
-Inside a router, an app requesting `http://bob.lan/api/users` hits `api`.
-From your browser, the `vnet-gateway` session (started automatically)
-serves:
+Inside a router, an app requesting `http://bob.lan/api/users` hits `api`,
+and apps reach each other by name (`http://api:3200`). From your browser,
+the `vnet-gateway` session (started automatically) serves each route by its
+hostname alone; the router name is never part of a URL:
 
-- `http://bob.lan.v1.localhost:7480`: works out of the box.
+- `http://bob.lan.localhost:7480`: works out of the box.
 - `http://bob.lan`, after a one-time `sax net register` (one sudo prompt;
-  `sax net unregister` undoes it). When several routers have `bob.lan`, use
-  `http://bob.v1.lan` / `http://bob.v2.lan`.
+  `sax net unregister` undoes it; `sax net register lan2` for another domain).
+
+A hostname belongs to one running project, so two versions side by side use
+different domains (`domain: lan` → `bob.lan`, `domain: lan2` → `bob.lan2`);
+`sax net up` refuses a project whose hostnames a running one already serves.
 
 Under the hood, `register` points the system resolver at the gateway for
 `.lan` only: `/etc/resolver/lan` on macOS, a systemd-resolved drop-in on
 Linux. The gateway then also listens on port 80. Until a domain is
 registered, sax keeps printing the `.localhost` URLs.
+
+On macOS, apps run by Apple's protected programs keep their network too:
+`zsh`, `sh -c` scripts, `#!/usr/bin/env` scripts and `python3` (sax runs
+the real Python of your Command Line Tools / Xcode instead of the
+`/usr/bin/python3` stub).
 
 Pages opened through the gateway get a small banner so each browser tab says
 what it shows, e.g. `⎇ feat/login* · f0d5d61 · repo-login · v1 › web` (branch,

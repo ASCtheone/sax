@@ -2,5 +2,13 @@
 # this shell started. Put it back for everything the shell runs, then hand
 # over to the user's own startup files.
 export DYLD_INSERT_LIBRARIES="$SAX_VNET_SHIM"
+# python3 & co: run the real tool, not Apple's SIP-protected /usr/bin stub
+# (which would drop the shim). Kept first at every prompt, after .zshrc.
+if [[ -n "$SAX_VNET_DEVBIN" ]]; then
+  _sax_vnet_devbin() { path=("$SAX_VNET_DEVBIN" ${path:#$SAX_VNET_DEVBIN}) }
+  _sax_vnet_devbin
+  typeset -ga precmd_functions
+  precmd_functions+=(_sax_vnet_devbin)
+fi
 if [[ -n "$SAX_VNET_ZDOTDIR" ]]; then ZDOTDIR="$SAX_VNET_ZDOTDIR"; else unset ZDOTDIR; fi
 [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]] && source "${ZDOTDIR:-$HOME}/.zshenv"
