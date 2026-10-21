@@ -89,7 +89,7 @@ func doNetGateway(args []string) error {
 	writeState()
 	stateMu.Unlock()
 	defer os.Remove(gatewayStatePath())
-	fmt.Printf("sax vnet gateway: http://<host>.<router>.localhost%s\n", portSuffix(g.HostAddr()))
+	fmt.Printf("sax vnet gateway: http://<host>.localhost%s\n", portSuffix(g.HostAddr()))
 	return <-errc
 }
 
@@ -159,7 +159,7 @@ func ensureGateway(w io.Writer, s vnet.Store, run sessionRunner) error {
 	if err := run.Launch(gateway.SessionName, []string{exe, "net", "gateway"}, "", nil); err != nil {
 		return fmt.Errorf("start gateway: %w", err)
 	}
-	fmt.Fprintf(w, "started %s (http://<host>.<router>.localhost%s)\n", gateway.SessionName, portSuffix(gatewayAddr()))
+	fmt.Fprintf(w, "started %s (http://<host>.localhost%s)\n", gateway.SessionName, portSuffix(gatewayAddr()))
 	return nil
 }
 
@@ -198,7 +198,7 @@ func printHostURLs(w io.Writer, s vnet.Store, r vnet.Router) {
 	fmt.Fprintln(w, "\nfrom the host:")
 	reg, _ := s.Registration()
 	for _, h := range tables.HTTP {
-		fmt.Fprintf(w, "  %s\n", hostURL(s, reg, r, h.Host))
+		fmt.Fprintf(w, "  %s\n", hostURL(reg, h.Host))
 	}
 	for _, p := range pubs {
 		fmt.Fprintf(w, "  127.0.0.1:%d -> %s\n", p.HostPort, p.Target)

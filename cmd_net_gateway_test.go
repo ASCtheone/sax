@@ -72,7 +72,7 @@ func TestPrintHostURLs(t *testing.T) {
 	r, _ = r.WithRule("bob.lan/* -> web:4200")
 	var out bytes.Buffer
 	printHostURLs(&out, s, r)
-	if !strings.Contains(out.String(), "http://bob.lan.v1.localhost:7480") {
+	if !strings.Contains(out.String(), "http://bob.lan.localhost:7480") {
 		t.Errorf("output:\n%s", out.String())
 	}
 
@@ -83,7 +83,7 @@ func TestPrintHostURLs(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(vnetRoot(), gatewayStateFile), []byte(`{"pid":1,"addr":"0.0.0.0:80"}`), 0o644)
 	out.Reset()
 	printHostURLs(&out, s, r)
-	if !strings.Contains(out.String(), "http://bob.lan.v1.localhost\n") {
+	if !strings.Contains(out.String(), "http://bob.lan.localhost\n") {
 		t.Errorf("port 80 output:\n%s", out.String())
 	}
 }
@@ -104,7 +104,7 @@ func TestNetUp_PublishAndGateway(t *testing.T) {
 	if _, ok := run.launched[gateway.SessionName]; !ok {
 		t.Error("up with HTTP routes should start the gateway")
 	}
-	if !strings.Contains(out.String(), "http://bob.lan.v1.localhost") {
+	if !strings.Contains(out.String(), "http://bob.lan.localhost") {
 		t.Errorf("up should print host URLs:\n%s", out.String())
 	}
 }

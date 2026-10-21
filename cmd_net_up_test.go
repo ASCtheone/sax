@@ -189,13 +189,16 @@ func TestNetUp_RunsAppsAsTabsWithNetworkEnv(t *testing.T) {
 	}
 }
 
+// Two versions of the same app: same app names, same ports and IPs, each
+// in its own router; their URLs differ by domain (bob.lan / bob.lan2).
 func TestNetUp_TwoVersionsSideBySide(t *testing.T) {
 	fakeShim(t)
 	s := vnet.NewStore(t.TempDir())
 	run := newFakeRunner()
 	var out bytes.Buffer
-	for _, v := range []string{"v1", "v2"} {
-		if err := netUp(&out, s, run, projectRef{File: writeEnv(t, strings.Replace(upEnv, "router: v1", "router: "+v, 1))}, false); err != nil {
+	for v, domain := range map[string]string{"v1": "lan", "v2": "lan2"} {
+		env := strings.NewReplacer("router: v1", "router: "+v, "domain: lan", "domain: "+domain, "bob.lan/", "bob/").Replace(upEnv)
+		if err := netUp(&out, s, run, projectRef{File: writeEnv(t, env)}, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -313,5 +316,48 @@ func TestSupervisionWarning(t *testing.T) {
 	}
 	if w := supervisionWarning(shim.Paths{Lib: "/s/l.dylib"}); w != "" {
 		t.Errorf("macOS (no supervisor): %q", w)
+	}
+}
+
+// A route hostname belongs to one running project: a second project serving
+// bob.lan is refused while the first is up, and allowed with another domain
+// or once the first is down.
+func TestNetUp_HostClash(t *testing.T) {
+	fakeShim(t)
+	s := vnet.NewStore(t.TempDir())
+	run := newFakeRunner()
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, upEnv)}, false); err != nil {
+		t.Fatal(err)
+	}
+	v2 := strings.Replace(upEnv, "router: v1", "router: v2", 1)
+	err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, v2)}, false)
+	if err == nil || !strings.Contains(err.Error(), "bob.lan is already served by v1") || !strings.Contains(err.Error(), "--domain") {
+		t.Fatalf("clash: %v", err)
+	}
+
+	// Another domain: bare route hosts follow it.
+	v2lan2 := strings.NewReplacer("domain: lan", "domain: lan2", "bob.lan/", "bob/").Replace(v2)
+	var out bytes.Buffer
+	if err := netUp(&out, s, run, projectRef{File: writeEnv(t, v2lan2)}, false); err != nil {
+		t.Fatalf("other domain: %v", err)
+	}
+	r, _ := s.Get("v2")
+	if r.Rules[0] != "bob.lan2/api/* -> api:3200" {
+		t.Errorf("v2 rules = %v", r.Rules)
+	}
+	if !strings.Contains(out.String(), "http://bob.lan2.localhost") || strings.Contains(out.String(), ".v2.") {
+		t.Errorf("URLs must not carry the router:\n%s", out.String())
+	}
+
+	// With v2 up on lan2, a third clash suggests lan3.
+	v3 := strings.Replace(upEnv, "router: v1", "router: v3", 1)
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, v3)}, false); err == nil || !strings.Contains(err.Error(), "--domain lan3") {
+		t.Errorf("suggestion should skip lan2 (in use): %v", err)
+	}
+
+	// v1 down: the name is free again.
+	run.Kill("v1")
+	if err := netUp(&bytes.Buffer{}, s, run, projectRef{File: writeEnv(t, strings.Replace(upEnv, "router: v1", "router: v3", 1))}, false); err != nil {
+		t.Errorf("v1 is down, v3 may serve bob.lan: %v", err)
 	}
 }

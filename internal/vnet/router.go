@@ -36,8 +36,15 @@ type Router struct {
 	Project string `json:"project,omitempty"`
 }
 
-// NewRouter validates and builds an empty router.
+// DefaultDomain is the domain of route hostnames written without one.
+const DefaultDomain = "lan"
+
+// NewRouter validates and builds an empty router; domain "" means
+// DefaultDomain.
 func NewRouter(name, subnet, domain string) (Router, error) {
+	if domain == "" {
+		domain = DefaultDomain
+	}
 	r := Router{
 		Name:     name,
 		Subnet:   subnet,
@@ -248,12 +255,14 @@ func (r Router) ParsedRules() ([]Rule, error) {
 
 // WithRule appends a rule (it is evaluated after all existing ones) and gives
 // its hostname a service VIP, allocated from the top of the subnet down so it
-// stays clear of session addresses.
+// stays clear of session addresses. A hostname without a dot gets the
+// router's domain: "bob/api/*" is served as bob.lan.
 func (r Router) WithRule(raw string) (Router, error) {
 	rule, err := ParseRule(raw)
 	if err != nil {
 		return r, err
 	}
+	rule = rule.InDomain(r.Domain)
 	existing, err := r.ParsedRules()
 	if err != nil {
 		return r, err

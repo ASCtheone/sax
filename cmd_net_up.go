@@ -210,6 +210,62 @@ func netUp(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef, attach 
 	return nil
 }
 
+// checkHostClash refuses a plan whose HTTP route hostnames another running
+// router already serves: URLs carry no router name, so bob.lan must belong
+// to one running project. Two versions side by side use different domains.
+func checkHostClash(s vnet.Store, run sessionRunner, plan vnet.Router, project string) error {
+	mine := httpHosts(plan)
+	if len(mine) == 0 {
+		return nil
+	}
+	routers, err := s.List()
+	if err != nil {
+		return err
+	}
+	used := map[string]bool{plan.Domain: true}
+	var running []vnet.Router
+	for _, other := range routers {
+		if other.Name != plan.Name && run.Alive(other.Name) {
+			running = append(running, other)
+			used[other.Domain] = true
+		}
+	}
+	for _, other := range running {
+		for host := range httpHosts(other) {
+			if mine[host] {
+				owner := other.Project
+				if owner == "" {
+					owner = other.Name
+				}
+				return fmt.Errorf("%s is already served by %s, which is up; give %s another domain "+
+					"(sax net project set %s --domain %s) or another route host, or stop it: sax net down %s",
+					host, owner, project, project, freeDomain(plan.Domain, used), other.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// freeDomain suggests base2, base3, ... not used by a running project.
+func freeDomain(base string, used map[string]bool) string {
+	for i := 2; ; i++ {
+		if d := fmt.Sprintf("%s%d", base, i); !used[d] {
+			return d
+		}
+	}
+}
+
+func httpHosts(r vnet.Router) map[string]bool {
+	out := map[string]bool{}
+	rules, _ := r.ParsedRules()
+	for _, rule := range rules {
+		if rule.Kind == vnet.KindHTTP {
+			out[rule.Host] = true
+		}
+	}
+	return out
+}
+
 // preparedProject is a project whose router matches its file, ready for its
 // apps' tabs to be started.
 type preparedProject struct {
@@ -247,6 +303,9 @@ func prepareProject(w io.Writer, s vnet.Store, run sessionRunner, ref projectRef
 	}
 	if w := supervisionWarning(paths); w != "" {
 		warnings = append(warnings, w)
+	}
+	if err := checkHostClash(s, run, plan, p.Name); err != nil {
+		return preparedProject{}, err
 	}
 	stopLegacyApps(w, s, run, plan)
 	r, err := applyPlan(s, plan, explicitIPs(e))

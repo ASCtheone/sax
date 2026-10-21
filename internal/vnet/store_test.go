@@ -72,7 +72,7 @@ func TestStore_WritesShimTables(t *testing.T) {
 
 	dir := s.RouterDir("v1")
 	names, _ := os.ReadFile(filepath.Join(dir, "names"))
-	if !strings.Contains(string(names), "api.lan 10.12.12.4") {
+	if !strings.Contains(string(names), "api 10.12.12.4") || strings.Contains(string(names), "api.lan") {
 		t.Errorf("names = %q", names)
 	}
 	svc, _ := os.ReadFile(filepath.Join(dir, "svc"))

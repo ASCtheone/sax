@@ -48,6 +48,15 @@ type Rule struct {
 	Target Endpoint
 }
 
+// InDomain returns the rule with domain appended to a hostname that has no
+// dot ("bob" -> "bob.lan"); full hostnames are kept as written.
+func (r Rule) InDomain(domain string) Rule {
+	if domain != "" && !strings.Contains(r.Host, ".") {
+		r.Host += "." + domain
+	}
+	return r
+}
+
 // Pattern returns the left-hand side of the rule in canonical form.
 func (r Rule) Pattern() string {
 	if r.Kind == KindHTTP {

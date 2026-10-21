@@ -145,19 +145,23 @@ func TestGateway_Errors(t *testing.T) {
 	}
 }
 
+// From the host, a route is reached by its hostname alone: <host>.localhost
+// on the gateway port, or the plain name. The router never appears in it.
 func TestGateway_HostAccessViaLocalhost(t *testing.T) {
 	_, g := setup(t)
-	code, body := get(t, g.HostAddr(), "bob.lan.v1.localhost:7480", "/api/users")
-	if code != 200 || !strings.HasPrefix(body, "api /api/users") {
-		t.Errorf("host access = %d %q", code, body)
+	for _, host := range []string{"bob.lan.localhost:7480", "bob.lan"} {
+		code, body := get(t, g.HostAddr(), host, "/api/users")
+		if code != 200 || !strings.HasPrefix(body, "api /api/users") {
+			t.Errorf("%s = %d %q", host, code, body)
+		}
 	}
-	code, _ = get(t, g.HostAddr(), "bob.lan.ghost.localhost", "/")
+	code, _ := get(t, g.HostAddr(), "bob.lan.v1.localhost", "/")
 	if code != http.StatusNotFound {
-		t.Errorf("unknown router = %d", code)
+		t.Errorf("router names are not part of URLs any more: %d", code)
 	}
-	code, body = get(t, g.HostAddr(), "example.com", "/")
-	if code != http.StatusNotFound || !strings.Contains(body, ".localhost") {
-		t.Errorf("non-localhost host = %d %q", code, body)
+	code, body := get(t, g.HostAddr(), "example.com", "/")
+	if code != http.StatusNotFound || !strings.Contains(body, "no route for example.com") {
+		t.Errorf("unknown host = %d %q", code, body)
 	}
 }
 
@@ -221,21 +225,15 @@ func TestGateway_Publish(t *testing.T) {
 	}
 }
 
-func TestParseLocalhostHost(t *testing.T) {
-	cases := map[string][2]string{
-		"bob.lan.v1.localhost":      {"v1", "bob.lan"},
-		"bob.lan.v1.localhost:7480": {"v1", "bob.lan"},
-		"API.V2.LOCALHOST":          {"v2", "api"},
-	}
-	for in, want := range cases {
-		router, host, ok := parseLocalhostHost(in)
-		if !ok || router != want[0] || host != want[1] {
-			t.Errorf("parseLocalhostHost(%q) = %q %q %v", in, router, host, ok)
-		}
-	}
-	for _, bad := range []string{"v1.localhost", "localhost", "bob.lan.v1.example.com", ""} {
-		if _, _, ok := parseLocalhostHost(bad); ok {
-			t.Errorf("parseLocalhostHost(%q) should fail", bad)
+func TestHostOnlyLower(t *testing.T) {
+	for in, want := range map[string]string{
+		"bob.lan":                "bob.lan",
+		"Bob.LAN:7480":           "bob.lan",
+		"bob.lan.localhost:7480": "bob.lan.localhost",
+		"bob.lan.":               "bob.lan",
+	} {
+		if got := hostOnlyLower(in); got != want {
+			t.Errorf("hostOnlyLower(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

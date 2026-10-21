@@ -22,12 +22,14 @@ const (
 	EnvZWrapper    = "SAX_VNET_ZWRAPPER"
 	EnvOrigZDotDir = "SAX_VNET_ZDOTDIR"
 	EnvSupervisor  = "SAX_VNET_SUPERVISOR"
+	EnvDevBin      = "SAX_VNET_DEVBIN"
 
 	envDyld          = "DYLD_INSERT_LIBRARIES"
 	envLDPreload     = "LD_PRELOAD"
 	envNodeOptions   = "NODE_OPTIONS"
 	envZDotDir       = "ZDOTDIR"
 	envPromptCommand = "PROMPT_COMMAND"
+	envPath          = "PATH"
 )
 
 // goos is runtime.GOOS; tests override it.
@@ -100,6 +102,9 @@ func DaemonEnv(m Member, p shim.Paths) []string {
 	if p.Supervisor != "" {
 		env = append(env, EnvSupervisor+"="+p.Supervisor)
 	}
+	if p.DevBin != "" {
+		env = append(env, EnvDevBin+"="+p.DevBin)
+	}
 	return env
 }
 
@@ -124,6 +129,9 @@ func PaneWrapper(getenv func(string) string) []string {
 //     the way (e.g. through #!/usr/bin/env node).
 //   - ZDOTDIR (zsh) and PROMPT_COMMAND (bash) re-export the shim inside the
 //     SIP-protected shells, which drop DYLD_* at startup.
+//   - PATH starts with the devbin folder (macOS), so python3 & co run the
+//     real tool instead of Apple's SIP-protected /usr/bin stub; the shells
+//     keep it first at every prompt.
 func PaneEnv(getenv func(string) string) []string {
 	lib := getenv(EnvShim)
 	if lib == "" {
@@ -154,14 +162,53 @@ func PaneEnv(getenv func(string) string) []string {
 		}
 	}
 
+	devbin := getenv(EnvDevBin)
+	if sipWorkarounds() && devbin != "" {
+		env = append(env, envPath+"="+devbinFirst(devbin, getenv(envPath)))
+	}
 	if sipWorkarounds() && getenv(envPromptCommand) == "" {
-		env = append(env, envPromptCommand+"="+exportLine(lib))
+		env = append(env, envPromptCommand+"="+promptLine(lib, devbin))
 	}
 	return env
 }
 
 func exportLine(lib string) string {
-	return fmt.Sprintf("export %s='%s'", envDyld, strings.ReplaceAll(lib, "'", `'\''`))
+	return fmt.Sprintf("export %s='%s'", envDyld, shellQuote(lib))
+}
+
+// promptLine is the bash PROMPT_COMMAND: re-export the shim and keep devbin
+// first on PATH (rc files may have put /usr/bin before it).
+func promptLine(lib, devbin string) string {
+	line := exportLine(lib)
+	if devbin != "" {
+		q := shellQuote(devbin)
+		line += fmt.Sprintf("; PATH='%s':\"${PATH//'%s:'/}\"", q, q)
+	}
+	return line
+}
+
+func shellQuote(s string) string { return strings.ReplaceAll(s, "'", `'\''`) }
+
+// devbinFirst returns path with devbin as its first entry, once.
+func devbinFirst(devbin, path string) string {
+	parts := []string{devbin}
+	for _, p := range strings.Split(path, ":") {
+		if p != "" && p != devbin {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, ":")
+}
+
+// withoutDevbin removes devbin from path.
+func withoutDevbin(devbin, path string) string {
+	var parts []string
+	for _, p := range strings.Split(path, ":") {
+		if p != devbin {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, ":")
 }
 
 // StripEnv removes everything PaneEnv and DaemonEnv added, restoring the
@@ -173,7 +220,7 @@ func StripEnv(environ []string) []string {
 		k, v, _ := strings.Cut(kv, "=")
 		vars[k] = v
 	}
-	lib, reinject, wrapper := vars[EnvShim], vars[EnvReinject], vars[EnvZWrapper]
+	lib, reinject, wrapper, devbin := vars[EnvShim], vars[EnvReinject], vars[EnvZWrapper], vars[EnvDevBin]
 
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
@@ -188,7 +235,10 @@ func StripEnv(environ []string) []string {
 				out = append(out, envLDPreload+"="+rest)
 			}
 			continue
-		case k == envPromptCommand && lib != "" && v == exportLine(lib):
+		case k == envPromptCommand && lib != "" && (v == exportLine(lib) || v == promptLine(lib, devbin)):
+			continue
+		case k == envPath && devbin != "":
+			out = append(out, envPath+"="+withoutDevbin(devbin, v))
 			continue
 		case k == envZDotDir && wrapper != "" && v == wrapper:
 			if orig := vars[EnvOrigZDotDir]; orig != "" {

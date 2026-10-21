@@ -48,9 +48,11 @@ defaults to the project name; dir: is the base of relative cwds):
          dev1: { dir: ~/code/dev1, sessions: { api: { cwd: api, cmd: npm start } } }
          dev2: { dir: ~/code/dev2, sessions: { ... }, routes: [ ... ] }
 
-from the host: http://<host>.<router>.localhost:7480 (HTTP routes) and published ports
+from the host: http://<host>.localhost:7480, or http://<host> after sax net register (HTTP
+routes; <host> is the route's name, e.g. bob.lan), and published ports
 
-rules: bob.lan/api/* -> api:3200   HTTP route, path forwarded unchanged
+rules: bob/api/* -> api:3200       HTTP route on bob.<domain> (default lan), path forwarded
+       bob.lan/api/* -> api:3200   the same with the hostname written out
        db.lan:5432   -> db:5432    TCP mapping (no proxy)
        bob.lan       -> api:3200   TCP mapping on port 80`
 

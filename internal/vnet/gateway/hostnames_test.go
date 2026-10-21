@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -54,6 +53,13 @@ func startGateway(t *testing.T, s vnet.Store) (*Gateway, *atomic.Bool) {
 
 func addRouter(t *testing.T, s vnet.Store, name string) {
 	t.Helper()
+	addRouterApp(t, s, name, true)
+}
+
+// addRouterApp adds router name with bob.lan/* -> api:3200, and api
+// listening when listening is set (a router that is down keeps its routes).
+func addRouterApp(t *testing.T, s vnet.Store, name string, listening bool) {
+	t.Helper()
 	r, _ := vnet.NewRouter(name, "10.12.12.0/24", "lan")
 	if err := s.Create(r); err != nil {
 		t.Fatal(err)
@@ -65,7 +71,9 @@ func addRouter(t *testing.T, s vnet.Store, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fakeSession(t, s, name, "10.12.12.4", 3200, "api-"+name)
+	if listening {
+		fakeSession(t, s, name, "10.12.12.4", 3200, "api-"+name)
+	}
 }
 
 func TestGateway_RegisteredDomains(t *testing.T) {
@@ -73,12 +81,11 @@ func TestGateway_RegisteredDomains(t *testing.T) {
 	addRouter(t, s, "v1")
 	g, port80 := startGateway(t, s)
 
-	// Not registered: plain names are not served, .localhost still is.
-	if code, body := get(t, g.HostAddr(), "bob.lan", "/"); code != 404 || !strings.Contains(body, "sax net register") {
-		t.Errorf("unregistered = %d %q", code, body)
-	}
-	if code, body := get(t, g.HostAddr(), "bob.lan.v1.localhost", "/x"); code != 200 || !strings.HasPrefix(body, "api-v1 /x") {
-		t.Errorf("localhost fallback = %d %q", code, body)
+	// Not registered: the gateway port serves the name and <name>.localhost.
+	for _, host := range []string{"bob.lan", "bob.lan.localhost"} {
+		if code, body := get(t, g.HostAddr(), host, "/x"); code != 200 || !strings.HasPrefix(body, "api-v1 /x") {
+			t.Errorf("%s = %d %q", host, code, body)
+		}
 	}
 	if g.Port80Addr() != "" {
 		t.Error(":80 must stay closed until a domain is registered")
@@ -90,26 +97,23 @@ func TestGateway_RegisteredDomains(t *testing.T) {
 	}
 	waitFor(t, port80.Load)
 	addr := g.Port80Addr()
-
 	if code, body := get(t, addr, "bob.lan", "/api/users"); code != 200 || !strings.HasPrefix(body, "api-v1 /api/users") {
 		t.Errorf("bob.lan = %d %q", code, body)
 	}
 
-	// A second router with the same name makes bob.lan ambiguous.
-	addRouter(t, s, "v2")
-	waitFor(t, func() bool {
-		code, _ := get(t, addr, "bob.v2.lan", "/")
-		return code == 200
-	})
-	code, body := get(t, addr, "bob.lan", "/")
-	if code != 404 || !strings.Contains(body, "http://bob.v1.lan") || !strings.Contains(body, "http://bob.v2.lan") {
-		t.Errorf("ambiguous = %d %q", code, body)
+	// Another router with bob.lan whose app is not running (down, routes
+	// kept) does not take the name.
+	addRouterApp(t, s, "v2", false)
+	time.Sleep(200 * time.Millisecond) // let the gateway reload
+	if code, body := get(t, addr, "bob.lan", "/p"); code != 200 || !strings.HasPrefix(body, "api-v1 /p") {
+		t.Errorf("with a down v2 = %d %q", code, body)
 	}
-	for _, r := range []string{"v1", "v2"} {
-		host := fmt.Sprintf("bob.%s.lan", r)
-		if code, body := get(t, addr, host, "/p"); code != 200 || !strings.HasPrefix(body, "api-"+r+" /p") {
-			t.Errorf("%s = %d %q", host, code, body)
-		}
+
+	// Both running: a conflict to fix with another domain, not a guess.
+	fakeSession(t, s, "v2", "10.12.12.4", 3200, "api-v2")
+	code, body := get(t, addr, "bob.lan", "/")
+	if code != 404 || !strings.Contains(body, "routers v1, v2") || !strings.Contains(body, "another domain") {
+		t.Errorf("two live routers = %d %q", code, body)
 	}
 	if code, body := get(t, addr, "nope.lan", "/"); code != 404 || !strings.Contains(body, "no route") {
 		t.Errorf("unknown = %d %q", code, body)
@@ -118,7 +122,7 @@ func TestGateway_RegisteredDomains(t *testing.T) {
 	// The host DNS answers registered names with 127.0.0.1.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if ips, err := resolverFor(g.HostDNSAddr()).LookupHost(ctx, "bob.v2.lan"); err != nil || ips[0] != "127.0.0.1" {
+	if ips, err := resolverFor(g.HostDNSAddr()).LookupHost(ctx, "bob.lan"); err != nil || ips[0] != "127.0.0.1" {
 		t.Errorf("host dns = %v, %v", ips, err)
 	}
 

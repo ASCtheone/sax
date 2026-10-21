@@ -7,6 +7,8 @@
 //   script with "#!/usr/bin/env prog"  -> exec prog directly (skip env)
 //   /bin/sh -c "script" (and bash/zsh/dash/ksh)
 //                                       -> -c "export DYLD_INSERT_LIBRARIES=..;script"
+//   /usr/bin/python3 (an xcrun stub)    -> the real tool in $SAX_VNET_DEVBIN,
+//                                          also as a script's interpreter
 //
 // Every child also gets DYLD_INSERT_LIBRARIES and the SAX_VNET_* settings
 // back if the caller passed a scrubbed environment.
@@ -32,7 +34,7 @@ static const char *const restricted_dirs[] = {"/bin/", "/sbin/", "/usr/bin/", "/
                                               "/usr/libexec/", "/System/", NULL};
 static const char *const posix_shells[] = {"sh", "bash", "zsh", "dash", "ksh", NULL};
 static const char *const carried_env[] = {ENV_SHIM, "SAX_VNET_DIR", "SAX_VNET_IP",
-                                          "SAX_VNET_SUBNET", NULL};
+                                          "SAX_VNET_SUBNET", "SAX_VNET_DEVBIN", NULL};
 
 static __attribute__((constructor)) void mark_active(void) {
     // Lets the Node fallback tell "shim loaded in this very process" apart
@@ -58,6 +60,19 @@ static int is_posix_shell(const char *path) {
     for (int i = 0; posix_shells[i]; i++)
         if (strcmp(base, posix_shells[i]) == 0) return 1;
     return 0;
+}
+
+static const char *base_name(const char *path) {
+    const char *b = strrchr(path, '/');
+    return b ? b + 1 : path;
+}
+
+// dev_tool finds the real tool for a SIP-protected developer stub (e.g.
+// /usr/bin/python3) among the links in $SAX_VNET_DEVBIN.
+static int dev_tool(const char *path, char *out, size_t n) {
+    const char *devbin = getenv("SAX_VNET_DEVBIN");
+    if (!devbin || !*devbin || !is_restricted(path)) return 0;
+    return snprintf(out, n, "%s/%s", devbin, base_name(path)) < (int)n && access(out, X_OK) == 0;
 }
 
 static const char *env_get(char *const envp[], const char *key) {
@@ -149,13 +164,25 @@ static const char *launder_shebang(rewrite_t *rw, const char *path, char *const 
 
     char *save = NULL;
     char *interp = strtok_r(buf + 2, " \t", &save);
-    if (!interp || strcmp(interp, "/usr/bin/env") != 0) return path;
-    char *prog = strtok_r(NULL, " \t", &save);
-    if (!prog || prog[0] == '-' || strchr(prog, '=')) return path;  // env options: leave alone
+    if (!interp) return path;
+    char resolved[PATH_MAX_LEN];
+    const char *prog;
+    if (strcmp(interp, "/usr/bin/env") == 0) {
+        prog = strtok_r(NULL, " \t", &save);
+        if (!prog || prog[0] == '-' || strchr(prog, '=')) return path;  // env options: leave alone
+        if (!path_lookup(prog, envp, resolved, sizeof resolved)) return path;
+        if (is_restricted(resolved)) {
+            char real[PATH_MAX_LEN];
+            if (!dev_tool(resolved, real, sizeof real)) return path;
+            snprintf(resolved, sizeof resolved, "%s", real);
+        }
+    } else if (dev_tool(interp, resolved, sizeof resolved)) {  // #!/usr/bin/python3
+        prog = base_name(interp);
+    } else {
+        return path;
+    }
     char *extra = strtok_r(NULL, " \t", &save);  // one shebang argument, like the kernel
 
-    char resolved[PATH_MAX_LEN];
-    if (!path_lookup(prog, envp, resolved, sizeof resolved) || is_restricted(resolved)) return path;
 
     int argc = count(argv);
     char **out = calloc(argc + 4, sizeof *out);
@@ -204,6 +231,8 @@ static const char *rewrite(rewrite_t *rw, const char *path, char *const argv[], 
         prefix_shell_script(rw, argv, argv_out);
         return path;
     }
+    char real[PATH_MAX_LEN];
+    if (dev_tool(path, real, sizeof real)) return keep(rw, strdup(real));  // /usr/bin/python3
     return launder_shebang(rw, path, argv, *envp_out, argv_out);
 }
 

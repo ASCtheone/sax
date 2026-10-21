@@ -84,6 +84,9 @@ type Paths struct {
 	// Supervisor runs pane commands under seccomp (Linux), so binaries that
 	// skip libc get virtual addresses too.
 	Supervisor string
+	// DevBin holds links to the real developer tools behind Apple's
+	// SIP-protected /usr/bin stubs (macOS; "" when none). See devbin.go.
+	DevBin string
 }
 
 func pathsIn(dir string, p platform) Paths {
@@ -119,6 +122,18 @@ func Version() string {
 // Install makes sure the shim for this sax version exists under root and
 // returns its paths. Safe to call concurrently from several processes.
 func Install(root string) (Paths, error) {
+	paths, err := installLib(root)
+	if err != nil || paths.ZDotDir == "" {
+		return paths, err
+	}
+	// Without it only python3 & co lose the network; everything else works.
+	if dir, err := installDevBin(root); err == nil {
+		paths.DevBin = dir
+	}
+	return paths, nil
+}
+
+func installLib(root string) (Paths, error) {
 	plat, ok := currentPlatform()
 	if !ok {
 		return Paths{}, ErrUnsupported

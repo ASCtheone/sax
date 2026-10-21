@@ -267,3 +267,48 @@ func TestSupervisorEnvAndWrapper(t *testing.T) {
 		t.Errorf("darwin: %v", w)
 	}
 }
+
+// macOS panes find the real python3 & co first on PATH (devbin), bash keeps
+// it first at each prompt, and stripping restores the user's PATH.
+func TestPaneEnv_DevBin(t *testing.T) {
+	withGOOS(t, "darwin")
+	p := testShim
+	p.DevBin = "/s/devbin-abc"
+	daemon := envMap(DaemonEnv(Member{Router: "v1", Host: "api", IP: "10.0.0.2", Subnet: "10.0.0.0/24", Dir: "/d"}, p))
+	if daemon[EnvDevBin] != "/s/devbin-abc" {
+		t.Fatalf("daemon env = %v", daemon)
+	}
+	daemon["PATH"] = "/usr/bin:/s/devbin-abc:/opt/bin"
+
+	env := envMap(PaneEnv(func(k string) string { return daemon[k] }))
+	if env["PATH"] != "/s/devbin-abc:/usr/bin:/opt/bin" {
+		t.Errorf("PATH = %q, want devbin first, once", env["PATH"])
+	}
+	if !strings.Contains(env["PROMPT_COMMAND"], `PATH='/s/devbin-abc':"${PATH//'/s/devbin-abc:'/}"`) {
+		t.Errorf("PROMPT_COMMAND = %q", env["PROMPT_COMMAND"])
+	}
+
+	merged := map[string]string{}
+	for k, v := range daemon {
+		merged[k] = v
+	}
+	for k, v := range env {
+		merged[k] = v
+	}
+	var environ []string
+	for k, v := range merged {
+		environ = append(environ, k+"="+v)
+	}
+	got := envMap(StripEnv(environ))
+	if got["PATH"] != "/usr/bin:/opt/bin" {
+		t.Errorf("stripped PATH = %q", got["PATH"])
+	}
+	if _, ok := got["PROMPT_COMMAND"]; ok {
+		t.Error("our PROMPT_COMMAND (with the PATH fix) not stripped")
+	}
+
+	withGOOS(t, "linux")
+	if env := envMap(PaneEnv(func(k string) string { return daemon[k] })); env["PATH"] != "" {
+		t.Errorf("no devbin PATH on Linux: %q", env["PATH"])
+	}
+}

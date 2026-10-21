@@ -95,7 +95,7 @@ func page(w http.ResponseWriter, r *http.Request) {
 func fetch(t *testing.T, addr, path, accept string) (*http.Response, string) {
 	t.Helper()
 	req, _ := http.NewRequest("GET", "http://"+addr+path, nil)
-	req.Host = "bob.lan.v1.localhost"
+	req.Host = "bob.lan.localhost"
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
