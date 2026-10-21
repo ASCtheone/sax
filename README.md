@@ -210,6 +210,8 @@ sessions:
   api: { cwd: ./api, cmd: "npm run start:dev" }
   web: { cwd: ./web, cmd: "ng serve" }
   db:  { cmd: "postgres -D ./data" }
+  shop: { nx: shop }           # nx task: nx run shop:serve (or shop:serve:development)
+  docs: { npm: docs:dev }      # npm script: npm run docs:dev
 routes:                        # checked in order, first match wins
   - bob.lan/api/* -> api:3200  # HTTP route, path forwarded unchanged
   - bob.lan/*     -> web:4200
@@ -260,6 +262,21 @@ sax net projects             # projects of ./.sax.lan and ~/.sax.net, and which 
 sax net up dev2              # start a project by name, from any folder
 cd ~/code/dev1/api && sax net up   # no ./.sax.lan: the project whose dir contains this folder
 sax net down dev2            # a project or router name
+```
+
+Or build `~/.sax.net` from the command line (comments you write in the file
+are kept, and every edit is checked before it is saved):
+
+```bash
+cd ~/code/dev1 && sax net project add dev1 --domain lan     # dir: this folder
+sax net project app add dev1 api --cmd "npm run start:dev" --cwd api \
+    --port 3200 --route 'dev1.lan/api/*' --publish 13200    # app + route + host port
+sax net project app add dev1 web --port 4200 --route 'dev1.lan/*' -- ng serve
+sax net project app add dev1 shop --nx shop -- --port 4300   # one of --cmd, --nx, --npm
+sax net project app set dev1 api --npm start:dev             # switch api to an npm script
+sax net project route add dev1 'dev1.lan/auth/*' api:3200 --at 1
+sax net project show dev1    # apps, routes, ports, URLs
+sax net project app rm dev1 web   # also drops web's routes and ports
 ```
 
 A local `./.sax.lan` wins over `~/.sax.net` (also for a project of the same

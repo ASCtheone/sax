@@ -100,7 +100,6 @@ func TestLoadConfig_Errors(t *testing.T) {
 		"mixed":       "router: v1\nprojects:\n  a: {sessions: {x: {cmd: y}}}\n",
 		"unknown key": "projects:\n  a: {sesions: {x: {cmd: y}}}\n",
 		"bad name":    "projects:\n  Bad_Name: {sessions: {x: {cmd: y}}}\n",
-		"empty":       "projects: {}\n",
 		"no router":   "sessions:\n  x: {cmd: y}\n",
 	} {
 		if _, err := LoadConfig(writeConfig(t, dir, "f.yaml", content)); err == nil {
@@ -144,5 +143,16 @@ func TestLoadEnvFile_RefusesProjectsFile(t *testing.T) {
 	path := writeConfig(t, t.TempDir(), "f.yaml", projectsEnv)
 	if _, err := LoadEnvFile(path); err == nil || !strings.Contains(err.Error(), "dev1, dev2, tools") {
 		t.Errorf("err = %v; should list the projects to pick from", err)
+	}
+}
+
+// A projects file whose last project was removed is valid (and empty).
+func TestLoadConfig_EmptyProjects(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, t.TempDir(), "f.yaml", "projects: {}\n"))
+	if err != nil || !c.Multi || len(c.Names()) != 0 {
+		t.Errorf("empty projects: %+v, %v", c, err)
+	}
+	if _, err := c.ForDir("/x"); err != nil {
+		t.Error(err)
 	}
 }

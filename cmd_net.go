@@ -19,6 +19,8 @@ const netUsage = `usage: sax net                                 list routers
        sax net map <router> <pattern> <target>   append a rule (first match wins)
        sax net unmap <router> <pattern>
        sax net projects                          projects of ./.sax.lan and ~/.sax.net
+       sax net project add|set|rm|show <name>    manage projects in ~/.sax.net (sax net project help)
+       sax net project app|route|port add|rm ... apps with their command, routes and ports
        sax net check [project] [-f file]         validate env files (default: ./.sax.lan, ~/.sax.net)
        sax net up [project] [-f file] [-d]       run the apps as tabs of session <router> and attach
                                                  (default: ./.sax.lan, else the ~/.sax.net project
@@ -109,6 +111,8 @@ func doNet(args []string) {
 		if o, err = logOptsFromArgs(args); err == nil {
 			err = netRestart(os.Stdout, vnetStore(), daemonRunner{}, pos, o)
 		}
+	case "project", "proj":
+		err = netProject(os.Stdout, daemonRunner{}, args)
 	case "projects":
 		dir, _ := os.Getwd()
 		err = netProjects(os.Stdout, daemonRunner{}, dir)

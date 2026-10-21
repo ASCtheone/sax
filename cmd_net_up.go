@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/asc/sax/internal/ipc"
+	"github.com/asc/sax/internal/nx"
 	"github.com/asc/sax/internal/server"
 	"github.com/asc/sax/internal/vnet"
 	"github.com/asc/sax/internal/vnet/shim"
@@ -290,7 +291,34 @@ func appTab(s vnet.Store, r vnet.Router, paths shim.Paths, host string, spec vne
 	if wrapper := vnet.PaneWrapper(getenv); wrapper != nil {
 		cmd = append(append([]string{}, wrapper...), cmd...)
 	}
-	return server.TabSpec{Name: host, Cmd: cmd, Dir: spec.Cwd, Env: env, Input: spec.Cmd}
+	return server.TabSpec{Name: host, Cmd: cmd, Dir: spec.Cwd, Env: env, Input: appCommand(spec)}
+}
+
+// appCommand is the shell command an app's tab runs: its cmd, its nx task
+// through the same nx as sax nx (global nx, else npx nx), or npm run with
+// its npm script. Plan has checked that exactly one is set.
+func appCommand(spec vnet.SessionSpec) string {
+	kind, value, _ := spec.Run()
+	switch kind {
+	case "nx":
+		return shellJoin(nx.Command(vnet.NXTask(value)...))
+	case "npm":
+		return "npm run " + value
+	}
+	return value
+}
+
+// shellJoin joins words into a command line, quoting words that need it.
+func shellJoin(words []string) string {
+	out := make([]string, len(words))
+	for i, w := range words {
+		if w == "" || strings.ContainsAny(w, " \t'\"$`\\|&;<>()*?[]#~") {
+			out[i] = "'" + strings.ReplaceAll(w, "'", `'\''`) + "'"
+		} else {
+			out[i] = w
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // stopLegacyApps stops per-app sessions started by sax v1.6 ("<router>.<app>"),

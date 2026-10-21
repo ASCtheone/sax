@@ -88,9 +88,6 @@ func parseConfig(data []byte) (Config, error) {
 	if !reflect.DeepEqual(raw.EnvFile, EnvFile{}) {
 		return Config{}, fmt.Errorf("env file: use either router: ... or projects: ..., not both")
 	}
-	if len(raw.Projects) == 0 {
-		return Config{}, fmt.Errorf("env file: projects is empty")
-	}
 	for name, e := range raw.Projects {
 		if err := ValidateName("project", name); err != nil {
 			return Config{}, err

@@ -413,6 +413,9 @@ agent: sax --tail <name> [n]        last N lines from active pane (default 10)
                                     attach (-d: detached; later: sax -a <router>, or one app:
                                     sax -a <router>.<app>; sax --tail <router>.<app>)
        sax net projects             projects of ./.sax.lan, ~/.sax.net and ones brought up before
+       sax net project add <name>   add a project to ~/.sax.net (this folder), then
+                                    sax net project app add <name> <app> --cmd "..." [--port N
+                                    --route 'x.lan/api/*'] (sax net project help)
        sax net restart [project] [app...]
                                     kill and restart apps (all without app); any folder
        sax net logs [project] [app...] [-f]
