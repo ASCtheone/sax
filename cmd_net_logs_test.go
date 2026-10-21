@@ -39,8 +39,14 @@ func TestLogOptsFromArgs(t *testing.T) {
 	if _, err := logOptsFromArgs([]string{"-n", "lots"}); err == nil {
 		t.Error("-n lots should fail")
 	}
-	if got := netPositional([]string{"dev1", "-n", "20", "api", "-f"}); !reflect.DeepEqual(got, []string{"dev1", "api"}) {
-		t.Errorf("positional = %v (the -n value must not become an app)", got)
+	for _, args := range [][]string{
+		{"dev1", "-n", "20", "api", "-f"},
+		{"dev1", "-f", "api", "-n", "20"},
+		{"dev1", "-f", "-n", "20", "api"},
+	} {
+		if got := followPositional(args); !reflect.DeepEqual(got, []string{"dev1", "api"}) {
+			t.Errorf("%v: positional = %v (-f is a switch for logs/restart, -n takes a value)", args, got)
+		}
 	}
 }
 

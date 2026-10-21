@@ -141,8 +141,12 @@ func (s *Server) handleClient(conn net.Conn) {
 	if env.Type == MsgQuery {
 		var query QueryMsg
 		_ = DecodeData(env, &query)
-		if query.Type == QueryLogs {
-			s.handleLogs(conn, query.Args) // streams; must not hold the session lock
+		switch query.Type { // these must not hold the session lock throughout
+		case QueryLogs:
+			s.handleLogs(conn, query.Args) // streams
+			return
+		case QueryReplaceTab:
+			s.handleReplaceTab(conn, query.Args) // waits for processes to exit
 			return
 		}
 		s.handleQuery(conn, query)

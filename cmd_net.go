@@ -26,6 +26,8 @@ const netUsage = `usage: sax net                                 list routers
                                                  (-d: stay detached; sax -a <router> later,
                                                  or one app alone: sax -a <router>.<app>)
        sax net down <router|project> | -f <file> stop a router's sessions
+       sax net restart [project] [app...] [-f]   stop apps (their whole process tree) and start them
+                                                 fresh from the file; -f then follows their logs
        sax net logs [project] [app...] [-f] [-n N|all] [--no-color]
                                                  apps' output, "api | ..." (-f: follow; default:
                                                  this folder's project, last 100 lines per app)
@@ -71,6 +73,9 @@ func doNet(args []string) {
 		args = args[1:]
 	}
 	pos := netPositional(args)
+	if followCommands[sub] {
+		pos = followPositional(args)
+	}
 
 	var err error
 	switch sub {
@@ -98,6 +103,11 @@ func doNet(args []string) {
 		var o logOpts
 		if o, err = logOptsFromArgs(args); err == nil {
 			err = netLogs(os.Stdout, vnetStore(), daemonRunner{}, pos, o)
+		}
+	case "restart":
+		var o logOpts
+		if o, err = logOptsFromArgs(args); err == nil {
+			err = netRestart(os.Stdout, vnetStore(), daemonRunner{}, pos, o)
 		}
 	case "projects":
 		dir, _ := os.Getwd()
@@ -141,6 +151,25 @@ func routerArg(s vnet.Store, pos []string) ([]string, error) {
 		return nil, err
 	}
 	return append([]string{r}, pos[1:]...), nil
+}
+
+// followCommands use -f for --follow (a switch) instead of -f <file>.
+var followCommands = map[string]bool{"logs": true, "restart": true}
+
+// followPositional is netPositional for followCommands: -f takes no value.
+func followPositional(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if args[i] != "-f" && netFlagsWithValue[args[i]] {
+			i++
+			continue
+		}
+		if strings.HasPrefix(args[i], "-") && args[i] != "->" {
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // netPositional returns args with flags (and their values) removed.

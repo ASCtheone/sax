@@ -232,6 +232,8 @@ sax net down v1              # stop v1's apps
 sax --tail v1.api 20         # an app's output (its tab in session v1)
 sax net logs v1              # every app's output, compose style: "api | ...", "web | ..."
 sax net logs v1 api -f       # one app, following (-n N|all: backlog per app, default 100)
+sax net restart v1 api       # kill api's whole process tree, start it fresh (file re-read)
+sax net restart v1 -f        # every app, then follow their logs
 sax net check                # validate ./.sax.lan (e.g. warns about rules that can never match)
 ```
 

@@ -124,6 +124,14 @@ func (p *Process) Close() error {
 	return p.pty.Close()
 }
 
+// Pid returns the process ID of the command, or 0 before it started.
+func (p *Process) Pid() int {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+
 // Fd returns the file descriptor of the PTY master, if available.
 func (p *Process) Fd() uintptr {
 	if f, ok := p.pty.(interface{ Fd() uintptr }); ok {

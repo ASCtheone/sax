@@ -72,6 +72,25 @@ var netTools = []netTool{
 		args:        func(p map[string]interface{}) []string { return []string{"inspect", str(p, "router")} },
 	},
 	{
+		name: "sax_net_restart",
+		description: "Restart a vnet project's apps: stop each app's whole process tree, then start it " +
+			"fresh from the env file (edits apply). Works from any folder.",
+		props: map[string]interface{}{
+			"project": stringProp("Project or router name (default: the current folder's project)"),
+			"app":     stringProp("Only this app (default: every app of the project)"),
+		},
+		args: func(p map[string]interface{}) []string {
+			args := []string{"restart"}
+			if name := str(p, "project"); name != "" {
+				args = append(args, name)
+			}
+			if app := str(p, "app"); app != "" {
+				args = append(args, app)
+			}
+			return args
+		},
+	},
+	{
 		name: "sax_net_logs",
 		description: "Recent output of a vnet project's apps, compose style (\"api | ...\"). " +
 			"Works from any folder; for live output use sax_tail on <router>.<app>.",
