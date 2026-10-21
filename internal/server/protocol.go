@@ -106,6 +106,9 @@ type MouseWheelMsg struct {
 type AttachMsg struct {
 	W int `json:"w"`
 	H int `json:"h"`
+	// Tab pins the client to one tab by name (an app of a sax net up
+	// router): it sees and types into only that tab. Empty = whole session.
+	Tab string `json:"tab,omitempty"`
 }
 
 // QueryMsg requests session info without attaching.
@@ -143,6 +146,7 @@ type SnapshotMsg struct {
 	Name      string   `json:"name"`
 	Tabs      []string `json:"tabs"`
 	ActiveTab int      `json:"active_tab"`
+	Tab       string   `json:"tab,omitempty"` // the pinned tab; old daemons leave it empty
 	Frame     string   `json:"frame"`
 	W         int      `json:"w"`
 	H         int      `json:"h"`

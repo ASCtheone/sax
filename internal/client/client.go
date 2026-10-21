@@ -30,6 +30,11 @@ type sessionEventMsg struct {
 	event server.SessionEventMsg
 }
 
+// serverErrorMsg carries an error the server reported.
+type serverErrorMsg struct {
+	message string
+}
+
 // disconnectMsg signals the server disconnected.
 type disconnectMsg struct{}
 
@@ -51,18 +56,30 @@ type Model struct {
 	// maps a key string to a sax command string used in prefix mode.
 	prefixKey string
 	keymap    map[string]string
+
+	// tab pins this client to one tab of the session (sax -a router.app).
+	tab string
+	// err is why the client quit, if not a normal detach.
+	err string
 }
 
 // New creates a new client model connected to the given socket. It loads
-// ~/.saxrc to resolve the prefix key and prefix-mode keybindings.
-func New(conn net.Conn) *Model {
+// ~/.saxrc to resolve the prefix key and prefix-mode keybindings. A non-empty
+// tab attaches to only that tab of the session.
+func New(conn net.Conn, tab string) *Model {
 	prefixKey, keymap := buildKeymap(saxrc.Load())
 	return &Model{
 		conn:      conn,
 		writer:    server.NewConnWriter(conn),
 		prefixKey: prefixKey,
 		keymap:    keymap,
+		tab:       tab,
 	}
+}
+
+// Err returns why the client quit, or "" for a normal detach.
+func (m *Model) Err() string {
+	return m.err
 }
 
 // SetProgram stores the tea.Program reference.
@@ -86,8 +103,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ready = true
 			// Send attach message
 			_ = m.writer.WriteMsg(server.MsgAttach, &server.AttachMsg{
-				W: msg.Width,
-				H: msg.Height,
+				W:   msg.Width,
+				H:   msg.Height,
+				Tab: m.tab,
 			})
 			// Start reading frames from server
 			return m, m.readServerMessages()
@@ -111,8 +129,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case snapshotMsg:
+		if m.tab != "" && msg.snapshot.Tab != m.tab {
+			// A daemon from before v1.8.0 ignores the tab and would show the
+			// whole session.
+			m.err = "this session runs an older sax that cannot attach to one tab; restart it (sax net down, then sax net up)"
+			return m, tea.Quit
+		}
 		m.frame = msg.snapshot.Frame
 		return m, nil
+
+	case serverErrorMsg:
+		m.err = msg.message
+		return m, tea.Quit
 
 	case sessionEventMsg:
 		if msg.event.Event == server.EventSessionClosed {
@@ -338,7 +366,7 @@ func (m *Model) readServerMessages() tea.Cmd {
 				case server.MsgError:
 					var errMsg server.ErrorMsg
 					if err := server.DecodeData(env, &errMsg); err == nil {
-						log.Printf("server error: %s", errMsg.Message)
+						m.program.Send(serverErrorMsg{message: errMsg.Message})
 					}
 				}
 			}
