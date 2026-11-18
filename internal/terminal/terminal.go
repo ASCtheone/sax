@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/asc/sax/internal/scrollback"
 	"github.com/charmbracelet/x/vt"
@@ -14,17 +15,32 @@ type Terminal struct {
 	cols       int
 	rows       int
 	Scrollback *scrollback.Buffer
+
+	// cursorHidden mirrors DECTCEM (CSI ?25 l/h). TUIs that draw their own
+	// cursor hide the real one; sax must not paint a second one over theirs.
+	cursorHidden atomic.Bool
 }
 
 // New creates a new Terminal with the given dimensions.
 func New(cols, rows int) *Terminal {
 	emu := vt.NewSafeEmulator(cols, rows)
-	return &Terminal{
+	t := &Terminal{
 		emu:        emu,
 		cols:       cols,
 		rows:       rows,
 		Scrollback: scrollback.NewBuffer(scrollback.ConfiguredCapacity()),
 	}
+	emu.SetCallbacks(vt.Callbacks{
+		CursorVisibility: func(visible bool) { t.cursorHidden.Store(!visible) },
+	})
+	return t
+}
+
+// Cursor returns the emulator's cursor cell (0-based) and whether the
+// application wants it shown.
+func (t *Terminal) Cursor() (x, y int, visible bool) {
+	pos := t.emu.CursorPosition()
+	return pos.X, pos.Y, !t.cursorHidden.Load()
 }
 
 // Write feeds raw bytes from the PTY into the terminal emulator

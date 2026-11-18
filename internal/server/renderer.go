@@ -111,7 +111,7 @@ func padToSize(content string, width, height int) string {
 func renderPanes(tab *session.Tab, width, height int) string {
 	if tab.Zoomed {
 		if p, ok := tab.Panes[tab.ZoomedPane]; ok {
-			return padToSize(p.Render(), width, height)
+			return padToSize(renderPaneWithCursor(p), width, height)
 		}
 	}
 
@@ -120,14 +120,20 @@ func renderPanes(tab *session.Tab, width, height int) string {
 	// Single pane — render directly
 	if len(rects) == 1 {
 		for _, p := range tab.Panes {
-			return padToSize(p.Render(), width, height)
+			return padToSize(renderPaneWithCursor(p), width, height)
 		}
 	}
 
 	// Multiple panes — composite with borders
 	paneRenders := make(map[string]string)
 	for id := range rects {
-		if p, ok := tab.Panes[id]; ok {
+		p, ok := tab.Panes[id]
+		if !ok {
+			continue
+		}
+		if id == tab.ActivePane {
+			paneRenders[id] = renderPaneWithCursor(p)
+		} else {
 			paneRenders[id] = p.Render()
 		}
 	}
